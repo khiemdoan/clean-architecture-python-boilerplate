@@ -3,6 +3,8 @@ __author__ = 'Khiem Doan'
 __github__ = 'https://github.com/khiemdoan'
 __email__ = 'doankhiem.crazy@gmail.com'
 
+__all__ = ['arender', 'render']
+
 import asyncio
 from pathlib import Path
 from typing import Any
