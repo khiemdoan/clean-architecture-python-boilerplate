@@ -24,3 +24,9 @@ ruff = "*"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.isort]
+line_length = 120
+
+[tool.ruff]
+line-length = 120
