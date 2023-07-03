@@ -6,34 +6,33 @@ __email__ = 'doankhiem.crazy@gmail.com'
 from functools import lru_cache
 from urllib.parse import quote_plus
 
-from pydantic import PostgresDsn, ValidationError
+from pydantic import AmqpDsn, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class DatabaseSettings(BaseSettings):
+class RabbitmqSettings(BaseSettings):
     host: str
     port: str
     user: str
     password: str
-    database: str
 
-    model_config = SettingsConfigDict(extra='ignore', env_prefix='DATABASE_')
+    model_config = SettingsConfigDict(extra='ignore', env_prefix='RABBITMQ_')
 
     @property
-    def url(self) -> PostgresDsn:
-        scheme = 'postgresql+psycopg'
+    def url(self) -> AmqpDsn:
+        scheme = 'amqp'
         user = quote_plus(self.user)
         password = quote_plus(self.password)
         host = self.host
         port = self.port
-        return f'{scheme}://{user}:{password}@{host}:{port}/{self.database}'
+        return f'{scheme}://{user}:{password}@{host}:{port}/'
 
 
 @lru_cache
-def get_database_settings() -> DatabaseSettings:
+def get_rabbitmq_settings() -> RabbitmqSettings:
     try:
-        return DatabaseSettings()
+        return RabbitmqSettings()
     except ValidationError:
         pass
 
-    return DatabaseSettings(_env_file='.env')
+    return RabbitmqSettings(_env_file='.env')

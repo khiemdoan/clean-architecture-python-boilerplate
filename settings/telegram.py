@@ -5,14 +5,15 @@ __email__ = 'doankhiem.crazy@gmail.com'
 
 from functools import lru_cache
 
-from pydantic import BaseSettings, Field
-from pydantic.error_wrappers import ValidationError
+from pydantic import ValidationError
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class TelegramSettings(BaseSettings):
+    bot_token: str
+    chat_id: str
 
-    bot_token: str = Field(env='TELEGRAM_BOT_TOKEN')
-    chat_id: str = Field(env='TELEGRAM_CHAT_ID')
+    model_config = SettingsConfigDict(extra='ignore', env_prefix='TELEGRAM_')
 
 
 @lru_cache

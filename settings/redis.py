@@ -4,24 +4,26 @@ __github__ = 'https://github.com/khiemdoan'
 __email__ = 'doankhiem.crazy@gmail.com'
 
 from functools import lru_cache
+from urllib.parse import quote_plus
 
-from pydantic import BaseSettings, Field, RedisDsn, validator
-from pydantic.error_wrappers import ValidationError
+from pydantic import RedisDsn, ValidationError
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class RedisSettings(BaseSettings):
+    host: str
+    port: str
+    password: str
 
-    host: str = Field(env='REDIS_HOST')
-    port: str = Field(env='REDIS_PORT')
-    url: str = None
+    model_config = SettingsConfigDict(extra='ignore', env_prefix='REDIS_')
 
-    @validator('url')
-    def get_url(cls, _, values: dict[str, str]) -> str:
-        return RedisDsn.build(
-            scheme='redis',
-            host=values.get('host'),
-            port=values.get('port'),
-        )
+    @property
+    def url(self) -> RedisDsn:
+        scheme = 'redis'
+        password = quote_plus(self.password)
+        host = self.host
+        port = self.port
+        return f'{scheme}://:{password}@{host}:{port}/0'
 
 
 @lru_cache
