@@ -6,16 +6,17 @@ __email__ = 'doankhiem.crazy@gmail.com'
 from functools import lru_cache
 from urllib.parse import quote_plus
 
-from pydantic import PostgresDsn, ValidationError
+from pydantic import Field, PostgresDsn, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class DatabaseSettings(BaseSettings):
     host: str
-    port: str
+    port: int = Field(gt=0, le=65535)
     user: str
     password: str
-    database: str
+    db: str
+    debug: bool = False
 
     model_config = SettingsConfigDict(extra='ignore', env_prefix='DATABASE_')
 
@@ -26,7 +27,7 @@ class DatabaseSettings(BaseSettings):
         password = quote_plus(self.password)
         host = self.host
         port = self.port
-        return f'{scheme}://{user}:{password}@{host}:{port}/{self.database}'
+        return f'{scheme}://{user}:{password}@{host}:{port}/{self.db}'
 
 
 @lru_cache
