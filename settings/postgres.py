@@ -10,15 +10,15 @@ from pydantic import Field, PostgresDsn, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class DatabaseSettings(BaseSettings):
+class PostgresSettings(BaseSettings):
     host: str
-    port: int = Field(gt=0, le=65535)
+    port: int = Field(gt=0, le=65535, default=5432)
     user: str
     password: str
-    db: str
+    database: str
     debug: bool = False
 
-    model_config = SettingsConfigDict(extra='ignore', env_prefix='DATABASE_')
+    model_config = SettingsConfigDict(extra='ignore', env_prefix='POSTGRES_')
 
     @property
     def url(self) -> PostgresDsn:
@@ -27,14 +27,14 @@ class DatabaseSettings(BaseSettings):
         password = quote_plus(self.password)
         host = self.host
         port = self.port
-        return f'{scheme}://{user}:{password}@{host}:{port}/{self.db}'
+        return f'{scheme}://{user}:{password}@{host}:{port}/{self.database}'
 
 
 @lru_cache
-def get_database_settings() -> DatabaseSettings:
+def get_postgres_settings() -> PostgresSettings:
     try:
-        return DatabaseSettings()
+        return PostgresSettings()
     except ValidationError:
         pass
 
-    return DatabaseSettings(_env_file='.env')
+    return PostgresSettings(_env_file='.env')
