@@ -10,12 +10,12 @@ __email__ = 'doankhiem.crazy@gmail.com'
 """Application ORM configuration."""
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, ClassVar, Protocol, runtime_checkable
 from uuid import UUID
 
 from pydantic import AnyHttpUrl, AnyUrl, EmailStr
-from sqlalchemy import BigInteger, FromClause, MetaData, String, func
+from sqlalchemy import BigInteger, DateTime, FromClause, MetaData, String, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column, registry
 
 same_as = lambda col: lambda ctx: ctx.current_parameters.get(col)
@@ -64,14 +64,16 @@ class AuditColumns:
     """Created/Updated At Fields Mixin."""
 
     created_at: Mapped[datetime] = mapped_column(  # pyright: ignore
+        DateTime(timezone=True),
         server_default=func.now(),
-        default=datetime.now
+        default=lambda: datetime.now(timezone.utc),
     )
     """Date/time of instance creation."""
     updated_at: Mapped[datetime] = mapped_column(  # pyright: ignore
+        DateTime(timezone=True),
         server_default=func.now(),
-        default=datetime.now,
-        onupdate=datetime.now,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
     """Date/time of instance last update."""
 
