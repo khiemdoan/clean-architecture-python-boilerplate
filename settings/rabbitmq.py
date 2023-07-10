@@ -6,13 +6,13 @@ __email__ = 'doankhiem.crazy@gmail.com'
 from functools import lru_cache
 from urllib.parse import quote_plus
 
-from pydantic import AmqpDsn, ValidationError
+from pydantic import AmqpDsn, Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class RabbitmqSettings(BaseSettings):
     host: str
-    port: str
+    port: int = Field(gt=0, le=65535, default=5672)
     user: str
     password: str
 

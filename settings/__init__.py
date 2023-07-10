@@ -4,13 +4,16 @@ __github__ = 'https://github.com/khiemdoan'
 __email__ = 'doankhiem.crazy@gmail.com'
 
 __all__ = [
-    'DatabaseSettings', 'get_database_settings',
+    'MariadbSettings', 'get_mariadb_settings',
+    'PostgresSettings', 'get_postgres_settings',
     'RabbitmqSettings', 'get_rabbitmq_settings',
     'RedisSettings', 'get_redis_settings',
     'TelegramSettings', 'get_telegram_settings',
 ]
 
-from .database import DatabaseSettings, get_database_settings
+
+from .mariadb import MariadbSettings, get_mariadb_settings
+from .postgres import PostgresSettings, get_postgres_settings
 from .rabbitmq import RabbitmqSettings, get_rabbitmq_settings
 from .redis import RedisSettings, get_redis_settings
 from .telegram import TelegramSettings, get_telegram_settings

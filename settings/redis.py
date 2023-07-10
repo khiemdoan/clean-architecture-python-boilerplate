@@ -6,13 +6,13 @@ __email__ = 'doankhiem.crazy@gmail.com'
 from functools import lru_cache
 from urllib.parse import quote_plus
 
-from pydantic import RedisDsn, ValidationError
+from pydantic import Field, RedisDsn, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class RedisSettings(BaseSettings):
     host: str
-    port: str
+    port: int = Field(gt=0, le=65535, default=6379)
     password: str
 
     model_config = SettingsConfigDict(extra='ignore', env_prefix='REDIS_')
