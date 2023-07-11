@@ -11,15 +11,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class RedisSettings(BaseSettings):
-    host: str
+    host: str = 'localhost'
     port: int = Field(gt=0, le=65535, default=6379)
     password: str
+    tls: bool = False
 
     model_config = SettingsConfigDict(extra='ignore', env_prefix='REDIS_')
 
     @property
     def url(self) -> RedisDsn:
-        scheme = 'redis'
+        scheme = 'rediss' if self.tls else 'redis'
         password = quote_plus(self.password)
         host = self.host
         port = self.port

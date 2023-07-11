@@ -11,16 +11,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class RabbitmqSettings(BaseSettings):
-    host: str
+    host: str = 'localhost'
     port: int = Field(gt=0, le=65535, default=5672)
     user: str
     password: str
+    tls: bool = False
 
     model_config = SettingsConfigDict(extra='ignore', env_prefix='RABBITMQ_')
 
     @property
     def url(self) -> AmqpDsn:
-        scheme = 'amqp'
+        scheme = 'amqps' if self.tls else 'amqp'
         user = quote_plus(self.user)
         password = quote_plus(self.password)
         host = self.host

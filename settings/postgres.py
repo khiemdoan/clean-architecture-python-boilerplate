@@ -11,7 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class PostgresSettings(BaseSettings):
-    host: str
+    host: str = 'localhost'
     port: int = Field(gt=0, le=65535, default=5432)
     user: str
     password: str
