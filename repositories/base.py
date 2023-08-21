@@ -21,13 +21,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Generic, Iterable, Literal, Tuple, TypeAlias, TypeVar, cast
 
-from sqlalchemy import Select, delete
+from sqlalchemy import Select, TextClause, delete
 from sqlalchemy import func as sql_func
 from sqlalchemy import over, select, text, update
 from sqlalchemy.engine import Result
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import InstrumentedAttribute, Session
 
 from models.base import ModelProtocol
 
@@ -64,6 +64,18 @@ class BeforeAfter:
 
 
 @dataclass
+class OnBeforeAfter:
+    """Data required to filter a query on a ``datetime`` column."""
+
+    field_name: str
+    """Name of the model attribute to filter on."""
+    on_or_before: datetime | None
+    """Filter results where field is on or earlier than this."""
+    on_or_after: datetime | None
+    """Filter results where field on or later than this."""
+
+
+@dataclass
 class CollectionFilter(Generic[T]):
     """Data required to construct a ``WHERE ... IN (...)`` clause."""
 
@@ -71,6 +83,16 @@ class CollectionFilter(Generic[T]):
     """Name of the model attribute to filter on."""
     values: abc.Collection[T]
     """Values for ``IN`` clause."""
+
+
+@dataclass
+class NotInCollectionFilter(Generic[T]):
+    """Data required to construct a ``WHERE ... NOT IN (...)`` clause."""
+
+    field_name: str
+    """Name of the model attribute to filter on."""
+    values: abc.Collection[T]
+    """Values for ``NOT IN`` clause."""
 
 
 @dataclass
@@ -105,7 +127,19 @@ class SearchFilter:
     """Should the search be case insensitive."""
 
 
-FilterTypes: TypeAlias = BeforeAfter | CollectionFilter[Any] | LimitOffset | OrderBy | SearchFilter
+@dataclass
+class NotInSearchFilter:
+    """Data required to construct a ``WHERE field_name NOT LIKE '%' || :value || '%'`` clause."""
+
+    field_name: str
+    """Name of the model attribute to search on."""
+    value: str
+    """Values for ``NOT LIKE`` clause."""
+    ignore_case: bool | None = False
+    """Should the search be case insensitive."""
+
+
+FilterTypes: TypeAlias = BeforeAfter | OnBeforeAfter | CollectionFilter[Any] | LimitOffset | OrderBy | SearchFilter | NotInCollectionFilter[Any] | NotInSearchFilter
 """Aggregate type alias of the types supported for collection filtering."""
 
 
@@ -114,7 +148,7 @@ class AbstractAsyncRepository(Generic[T], metaclass=ABCMeta):
 
     model_type: type[T]
     """Type of object represented by the repository."""
-    id_attribute = "id"
+    id_attribute: Any = "id"
     """Name of the primary identifying attribute on :attr:`model_type`."""
 
     def __init__(self, **kwargs: Any) -> None:
@@ -293,6 +327,25 @@ class AbstractAsyncRepository(Generic[T], metaclass=ABCMeta):
         """
 
     @abstractmethod
+    async def upsert_many(self, data: list[T]) -> list[T]:
+        """Update or create multiple instances.
+
+        Update instances with the attribute values present on ``data``, or create a new instance if
+        one doesn't exist.
+
+        Args:
+            data: Instances to update or created. Identifier used to determine if an
+                existing instance exists is the value of an attribute on ``data`` named as value of
+                :attr:`id_attribute <AbstractAsyncRepository.id_attribute>`.
+
+        Returns:
+            The updated or created instances.
+
+        Raises:
+            NotFoundError: If no instance found with same identifier as ``data``.
+        """
+
+    @abstractmethod
     async def list_and_count(self, *filters: FilterTypes, **kwargs: Any) -> tuple[list[T], int]:
         """List records with total count.
 
@@ -350,29 +403,33 @@ class AbstractAsyncRepository(Generic[T], metaclass=ABCMeta):
         return item_or_none
 
     @classmethod
-    def get_id_attribute_value(cls, item: T | type[T]) -> Any:
+    def get_id_attribute_value(cls, item: T | type[T], id_attribute: str | None = None) -> Any:
         """Get value of attribute named as :attr:`id_attribute <AbstractAsyncRepository.id_attribute>` on ``item``.
 
         Args:
             item: Anything that should have an attribute named as :attr:`id_attribute <AbstractAsyncRepository.id_attribute>` value.
+            id_attribute: Allows customization of the unique identifier to use for model fetching.
+                Defaults to `None`, but can reference any surrogate or candidate key for the table.
 
         Returns:
             The value of attribute on ``item`` named as :attr:`id_attribute <AbstractAsyncRepository.id_attribute>`.
         """
-        return getattr(item, cls.id_attribute)
+        return getattr(item, id_attribute if id_attribute is not None else cls.id_attribute)
 
     @classmethod
-    def set_id_attribute_value(cls, item_id: Any, item: T) -> T:
+    def set_id_attribute_value(cls, item_id: Any, item: T, id_attribute: str | None = None) -> T:
         """Return the ``item`` after the ID is set to the appropriate attribute.
 
         Args:
             item_id: Value of ID to be set on instance
             item: Anything that should have an attribute named as :attr:`id_attribute <AbstractAsyncRepository.id_attribute>` value.
+            id_attribute: Allows customization of the unique identifier to use for model fetching.
+                Defaults to `None`, but can reference any surrogate or candidate key for the table.
 
         Returns:
             Item with ``item_id`` set to :attr:`id_attribute <AbstractAsyncRepository.id_attribute>`
         """
-        setattr(item, cls.id_attribute, item_id)
+        setattr(item, id_attribute if id_attribute is not None else cls.id_attribute, item_id)
         return item
 
 
@@ -381,7 +438,7 @@ class AbstractSyncRepository(Generic[T], metaclass=ABCMeta):
 
     model_type: type[T]
     """Type of object represented by the repository."""
-    id_attribute = "id"
+    id_attribute: Any = "id"
     """Name of the primary identifying attribute on :attr:`model_type`."""
 
     def __init__(self, **kwargs: Any) -> None:
@@ -560,6 +617,25 @@ class AbstractSyncRepository(Generic[T], metaclass=ABCMeta):
         """
 
     @abstractmethod
+    def upsert_many(self, data: list[T]) -> list[T]:
+        """Update or create multiple instances.
+
+        Update instances with the attribute values present on ``data``, or create a new instance if
+        one doesn't exist.
+
+        Args:
+            data: Instances to update or created. Identifier used to determine if an
+                existing instance exists is the value of an attribute on ``data`` named as value of
+                :attr:`id_attribute <AbstractAsyncRepository.id_attribute>`.
+
+        Returns:
+            The updated or created instances.
+
+        Raises:
+            NotFoundError: If no instance found with same identifier as ``data``.
+        """
+
+    @abstractmethod
     def list_and_count(self, *filters: FilterTypes, **kwargs: Any) -> tuple[list[T], int]:
         """List records with total count.
 
@@ -617,29 +693,33 @@ class AbstractSyncRepository(Generic[T], metaclass=ABCMeta):
         return item_or_none
 
     @classmethod
-    def get_id_attribute_value(cls, item: T | type[T]) -> Any:
+    def get_id_attribute_value(cls, item: T | type[T], id_attribute: str | None = None) -> Any:
         """Get value of attribute named as :attr:`id_attribute <AbstractAsyncRepository.id_attribute>` on ``item``.
 
         Args:
             item: Anything that should have an attribute named as :attr:`id_attribute <AbstractAsyncRepository.id_attribute>` value.
+            id_attribute: Allows customization of the unique identifier to use for model fetching.
+                Defaults to `None`, but can reference any surrogate or candidate key for the table.
 
         Returns:
             The value of attribute on ``item`` named as :attr:`id_attribute <AbstractAsyncRepository.id_attribute>`.
         """
-        return getattr(item, cls.id_attribute)
+        return getattr(item, id_attribute if id_attribute is not None else cls.id_attribute)
 
     @classmethod
-    def set_id_attribute_value(cls, item_id: Any, item: T) -> T:
+    def set_id_attribute_value(cls, item_id: Any, item: T, id_attribute: str | None = None) -> T:
         """Return the ``item`` after the ID is set to the appropriate attribute.
 
         Args:
             item_id: Value of ID to be set on instance
             item: Anything that should have an attribute named as :attr:`id_attribute <AbstractAsyncRepository.id_attribute>` value.
+            id_attribute: Allows customization of the unique identifier to use for model fetching.
+                Defaults to `None`, but can reference any surrogate or candidate key for the table.
 
         Returns:
             Item with ``item_id`` set to :attr:`id_attribute <AbstractAsyncRepository.id_attribute>`
         """
-        setattr(item, cls.id_attribute, item_id)
+        setattr(item, id_attribute if id_attribute is not None else cls.id_attribute, item_id)
         return item
 
 
@@ -666,10 +746,17 @@ def wrap_sqlalchemy_exception() -> Any:
         raise RepositoryError from exc
 
 
+def get_instrumented_attr(model: type[ModelProtocol], key: str | InstrumentedAttribute) -> InstrumentedAttribute:
+    if isinstance(key, str):
+        return cast("InstrumentedAttribute", getattr(model, key))
+    return key
+
+
 class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]):
     """SQLAlchemy based implementation of the repository interface."""
 
     match_fields: list[str] | str | None = None
+    id_attribute: str | InstrumentedAttribute
 
     def __init__(
         self,
@@ -707,20 +794,24 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
     async def add(
         self,
         data: ModelT,
-        **kwargs: Any,
+        auto_commit: bool | None = None,
+        auto_expunge: bool | None = None,
+        auto_refresh: bool | None = None,
     ) -> ModelT:
         """Add `data` to the collection.
 
         Args:
             data: Instance to be added to the collection.
-            **kwargs: Additional arguments.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_refresh: Refresh object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_refresh <SQLAlchemyAsyncRepository>`
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
 
         Returns:
             The added instance.
         """
-        auto_commit = kwargs.pop("auto_commit", self.auto_commit)
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
-        auto_refresh = kwargs.pop("auto_refresh", self.auto_refresh)
         with wrap_sqlalchemy_exception():
             instance = await self._attach_to_session(data)
             await self._flush_or_commit(auto_commit=auto_commit)
@@ -731,19 +822,21 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
     async def add_many(
         self,
         data: list[ModelT],
-        **kwargs: Any,
+        auto_commit: bool | None = None,
+        auto_expunge: bool | None = None,
     ) -> list[ModelT]:
         """Add Many `data` to the collection.
 
         Args:
             data: list of Instances to be added to the collection.
-            **kwargs: Additional arguments.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
 
         Returns:
             The added instances.
         """
-        auto_commit = kwargs.pop("auto_commit", self.auto_commit)
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
         with wrap_sqlalchemy_exception():
             self.session.add_all(data)
             await self._flush_or_commit(auto_commit=auto_commit)
@@ -754,13 +847,20 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
     async def delete(
         self,
         item_id: Any,
-        **kwargs: Any,
+        auto_commit: bool | None = None,
+        auto_expunge: bool | None = None,
+        id_attribute: str | InstrumentedAttribute | None = None,
     ) -> ModelT:
         """Delete instance identified by ``item_id``.
 
         Args:
             item_id: Identifier of instance to be deleted.
-            **kwargs: Additional arguments.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
+            id_attribute: Allows customization of the unique identifier to use for model fetching.
+                Defaults to `id`, but can reference any surrogate or candidate key for the table.
 
         Returns:
             The deleted instance.
@@ -768,10 +868,8 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
         Raises:
             NotFoundError: If no instance found identified by ``item_id``.
         """
-        auto_commit = kwargs.pop("auto_commit", self.auto_commit)
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
         with wrap_sqlalchemy_exception():
-            instance = await self.get(item_id)
+            instance = await self.get(item_id, id_attribute=id_attribute)
             await self.session.delete(instance)
             await self._flush_or_commit(auto_commit=auto_commit)
             self._expunge(instance, auto_expunge=auto_expunge)
@@ -780,46 +878,53 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
     async def delete_many(
         self,
         item_ids: list[Any],
-        **kwargs: Any,
+        auto_commit: bool | None = None,
+        auto_expunge: bool | None = None,
+        id_attribute: str | InstrumentedAttribute | None = None,
+        chunk_size: int | None = None,
     ) -> list[ModelT]:
         """Delete instance identified by `item_id`.
 
         Args:
             item_ids: Identifier of instance to be deleted.
-            **kwargs: Additional arguments.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
+            id_attribute: Allows customization of the unique identifier to use for model fetching.
+                Defaults to `id`, but can reference any surrogate or candidate key for the table.
+            chunk_size: Allows customization of the ``insertmanyvalues_max_parameters`` setting for the driver.
+                Defaults to `950` if left unset.
 
         Returns:
             The deleted instances.
 
         """
-        auto_commit = kwargs.pop("auto_commit", self.auto_commit)
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
+
         with wrap_sqlalchemy_exception():
+            id_attribute = get_instrumented_attr(
+                self.model_type, id_attribute if id_attribute is not None else self.id_attribute
+            )
             instances: list[ModelT] = []
-            chunk_size = 450
+            chunk_size = self._get_insertmanyvalues_max_parameters(chunk_size)
             for idx in range(0, len(item_ids), chunk_size):
                 chunk = item_ids[idx : min(idx + chunk_size, len(item_ids))]
                 if self._dialect.delete_executemany_returning:
                     instances.extend(
                         await self.session.scalars(
-                            delete(self.model_type)
-                            .where(getattr(self.model_type, self.id_attribute).in_(chunk))
-                            .returning(self.model_type)
+                            delete(self.model_type).where(id_attribute.in_(chunk)).returning(self.model_type)
                         )
                     )
                 else:
-                    instances.extend(
-                        await self.session.scalars(
-                            select(self.model_type).where(getattr(self.model_type, self.id_attribute).in_(chunk))
-                        )
-                    )
-                    await self.session.execute(
-                        delete(self.model_type).where(getattr(self.model_type, self.id_attribute).in_(chunk))
-                    )
+                    instances.extend(await self.session.scalars(select(self.model_type).where(id_attribute.in_(chunk))))
+                    await self.session.execute(delete(self.model_type).where(id_attribute.in_(chunk)))
             await self._flush_or_commit(auto_commit=auto_commit)
             for instance in instances:
                 self._expunge(instance, auto_expunge=auto_expunge)
             return instances
+
+    def _get_insertmanyvalues_max_parameters(self, chunk_size: int | None = None) -> int:
+        return chunk_size if chunk_size is not None else DEFAULT_INSERTMANYVALUES_MAX_PARAMETERS
 
     async def exists(self, **kwargs: Any) -> bool:
         """Return true if the object specified by ``kwargs`` exists.
@@ -834,12 +939,23 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
         existing = await self.count(**kwargs)
         return existing > 0
 
-    async def get(self, item_id: Any, **kwargs: Any) -> ModelT:
+    async def get(  # type: ignore[override]
+        self,
+        item_id: Any,
+        auto_expunge: bool | None = None,
+        statement: Select[tuple[ModelT]] | None = None,
+        id_attribute: str | InstrumentedAttribute | None = None,
+    ) -> ModelT:
         """Get instance identified by `item_id`.
 
         Args:
             item_id: Identifier of the instance to be retrieved.
-            **kwargs: Additional parameters
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`
+            statement: To facilitate customization of the underlying select query.
+                Defaults to :class:`SQLAlchemyAsyncRepository.statement <SQLAlchemyAsyncRepository>`
+            id_attribute: Allows customization of the unique identifier to use for model fetching.
+                Defaults to `id`, but can reference any surrogate or candidate key for the table.
 
         Returns:
             The retrieved instance.
@@ -847,19 +963,28 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
         Raises:
             NotFoundError: If no instance found identified by `item_id`.
         """
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
         with wrap_sqlalchemy_exception():
-            statement = kwargs.pop("statement", self.statement)
-            statement = self._filter_select_by_kwargs(statement=statement, **{self.id_attribute: item_id})
+            id_attribute = id_attribute if id_attribute is not None else self.id_attribute
+            statement = statement if statement is not None else self.statement
+            statement = self._filter_select_by_kwargs(statement=statement, kwargs=[(id_attribute, item_id)])
             instance = (await self._execute(statement)).scalar_one_or_none()
             instance = self.check_not_found(instance)
             self._expunge(instance, auto_expunge=auto_expunge)
             return instance
 
-    async def get_one(self, **kwargs: Any) -> ModelT:
+    async def get_one(
+        self,
+        auto_expunge: bool | None = None,
+        statement: Select[tuple[ModelT]] | None = None,
+        **kwargs: Any,
+    ) -> ModelT:
         """Get instance identified by ``kwargs``.
 
         Args:
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`
+            statement: To facilitate customization of the underlying select query.
+                Defaults to :class:`SQLAlchemyAsyncRepository.statement <SQLAlchemyAsyncRepository>`
             **kwargs: Identifier of the instance to be retrieved.
 
         Returns:
@@ -868,32 +993,39 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
         Raises:
             NotFoundError: If no instance found identified by `item_id`.
         """
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
         with wrap_sqlalchemy_exception():
-            statement = kwargs.pop("statement", self.statement)
-            statement = self._filter_select_by_kwargs(statement=statement, **kwargs)
+            statement = statement if statement is not None else self.statement
+            statement = self._filter_select_by_kwargs(statement=statement, kwargs=kwargs)
             instance = (await self._execute(statement)).scalar_one_or_none()
             instance = self.check_not_found(instance)
             self._expunge(instance, auto_expunge=auto_expunge)
             return instance
 
-    async def get_one_or_none(self, **kwargs: Any) -> ModelT | None:
+    async def get_one_or_none(
+        self,
+        auto_expunge: bool | None = None,
+        statement: Select[tuple[ModelT]] | None = None,
+        **kwargs: Any,
+    ) -> ModelT | None:
         """Get instance identified by ``kwargs`` or None if not found.
 
         Args:
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`
+            statement: To facilitate customization of the underlying select query.
+                Defaults to :class:`SQLAlchemyAsyncRepository.statement <SQLAlchemyAsyncRepository>`
             **kwargs: Identifier of the instance to be retrieved.
 
         Returns:
             The retrieved instance or None
         """
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
         with wrap_sqlalchemy_exception():
-            statement = kwargs.pop("statement", self.statement)
-            statement = self._filter_select_by_kwargs(statement=statement, **kwargs)
+            statement = statement if statement is not None else self.statement
+            statement = self._filter_select_by_kwargs(statement=statement, kwargs=kwargs)
             instance = (await self._execute(statement)).scalar_one_or_none()
             if instance:
                 self._expunge(instance, auto_expunge=auto_expunge)
-            return instance  # type: ignore
+            return instance
 
     async def get_or_create(
         self,
@@ -901,23 +1033,36 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
         upsert: bool = True,
         attribute_names: Iterable[str] | None = None,
         with_for_update: bool | None = None,
+        auto_commit: bool | None = None,
+        auto_expunge: bool | None = None,
+        auto_refresh: bool | None = None,
         **kwargs: Any,
     ) -> tuple[ModelT, bool]:
         """Get instance identified by ``kwargs`` or create if it doesn't exist.
 
         Args:
-            match_fields: a list of keys to use to match the existing model.  When empty, all fields are matched.
-            upsert: When using match_fields and actual model values differ from `kwargs`, perform an update operation on the model.
-            attribute_names: an iterable of attribute names to pass into the ``update`` method.
-            with_for_update: indicating FOR UPDATE should be used, or may be a dictionary containing flags to indicate a more specific set of FOR UPDATE flags for the SELECT
+            match_fields: a list of keys to use to match the existing model.  When
+                empty, all fields are matched.
+            upsert: When using match_fields and actual model values differ from
+                `kwargs`, perform an update operation on the model.
+            attribute_names: an iterable of attribute names to pass into the ``update``
+                method.
+            with_for_update: indicating FOR UPDATE should be used, or may be a
+                dictionary containing flags to indicate a more specific set of
+                FOR UPDATE flags for the SELECT
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_refresh: Refresh object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_refresh <SQLAlchemyAsyncRepository>`
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
             **kwargs: Identifier of the instance to be retrieved.
 
         Returns:
-            a tuple that includes the instance and whether or not it needed to be created.  When using match_fields and actual model values differ from `kwargs`, the model value will be updated.
+            a tuple that includes the instance and whether it needed to be created.
+            When using match_fields and actual model values differ from ``kwargs``, the
+            model value will be updated.
         """
-        auto_commit = kwargs.pop("auto_commit", self.auto_commit)
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
-        auto_refresh = kwargs.pop("auto_refresh", self.auto_refresh)
         match_fields = match_fields or self.match_fields
         if isinstance(match_fields, str):
             match_fields = [match_fields]
@@ -945,23 +1090,30 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
             self._expunge(existing, auto_expunge=auto_expunge)
         return existing, False
 
-    async def count(self, *filters: FilterTypes, **kwargs: Any) -> int:
+    async def count(
+        self,
+        *filters: FilterTypes,
+        statement: Select[tuple[ModelT]] | None = None,
+        **kwargs: Any,
+    ) -> int:
         """Get the count of records returned by a query.
 
         Args:
             *filters: Types for specific filtering operations.
+            statement: To facilitate customization of the underlying select query.
+                Defaults to :class:`SQLAlchemyAsyncRepository.statement <SQLAlchemyAsyncRepository>`
             **kwargs: Instance attribute value filters.
 
         Returns:
             Count of records returned by query, ignoring pagination.
         """
-        statement = kwargs.pop("statement", self.statement)
+        statement = statement if statement is not None else self.statement
         statement = statement.with_only_columns(
             sql_func.count(self.get_id_attribute_value(self.model_type)),
             maintain_column_froms=True,
         ).order_by(None)
         statement = self._apply_filters(*filters, apply_pagination=False, statement=statement)
-        statement = self._filter_select_by_kwargs(statement, **kwargs)
+        statement = self._filter_select_by_kwargs(statement, kwargs)
         results = await self._execute(statement)
         return results.scalar_one()  # type: ignore
 
@@ -970,16 +1122,29 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
         data: ModelT,
         attribute_names: Iterable[str] | None = None,
         with_for_update: bool | None = None,
-        **kwargs: Any,
+        auto_commit: bool | None = None,
+        auto_expunge: bool | None = None,
+        auto_refresh: bool | None = None,
+        id_attribute: str | InstrumentedAttribute | None = None,
     ) -> ModelT:
         """Update instance with the attribute values present on `data`.
 
         Args:
-            data: An instance that should have a value for `self.id_attribute` that exists in the
-                collection.
-            attribute_names: an iterable of attribute names to pass into the ``update`` method.
-            with_for_update: indicating FOR UPDATE should be used, or may be a dictionary containing flags to indicate a more specific set of FOR UPDATE flags for the SELECT
-            **kwargs: Additional arguments.
+            data: An instance that should have a value for `self.id_attribute` that
+                exists in the collection.
+            attribute_names: an iterable of attribute names to pass into the ``update``
+                method.
+            with_for_update: indicating FOR UPDATE should be used, or may be a
+                dictionary containing flags to indicate a more specific set of
+                FOR UPDATE flags for the SELECT
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_refresh: Refresh object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_refresh <SQLAlchemyAsyncRepository>`
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
+            id_attribute: Allows customization of the unique identifier to use for model fetching.
+                Defaults to `id`, but can reference any surrogate or candidate key for the table.
 
         Returns:
             The updated instance.
@@ -987,13 +1152,12 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
         Raises:
             NotFoundError: If no instance found with same identifier as `data`.
         """
-        auto_commit = kwargs.pop("auto_commit", self.auto_commit)
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
-        auto_refresh = kwargs.pop("auto_refresh", self.auto_refresh)
         with wrap_sqlalchemy_exception():
-            item_id = self.get_id_attribute_value(data)
+            item_id = self.get_id_attribute_value(
+                data, id_attribute=id_attribute.key if isinstance(id_attribute, InstrumentedAttribute) else id_attribute
+            )
             # this will raise for not found, and will put the item in the session
-            await self.get(item_id)
+            await self.get(item_id, id_attribute=id_attribute)
             # this will merge the inbound data to the instance we just put in the session
             instance = await self._attach_to_session(data, strategy="merge")
             await self._flush_or_commit(auto_commit=auto_commit)
@@ -1006,18 +1170,22 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
     async def update_many(
         self,
         data: list[ModelT],
-        **kwargs: Any,
+        auto_commit: bool | None = None,
+        auto_expunge: bool | None = None,
     ) -> list[ModelT]:
         """Update one or more instances with the attribute values present on `data`.
 
-        This function has an optimized bulk insert based on the configured SQL dialect:
-        - For backends supporting `RETURNING` with `executemany`, a single bulk insert with returning clause is executed.
-        - For other backends, it does a bulk insert and then selects the inserted records
+        This function has an optimized bulk update based on the configured SQL dialect:
+        - For backends supporting `RETURNING` with `executemany`, a single bulk update with returning clause is executed.
+        - For other backends, it does a bulk update and then returns the updated data after a refresh.
 
         Args:
             data: A list of instances to update.  Each should have a value for `self.id_attribute` that exists in the
                 collection.
-            **kwargs: Additional arguments.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
 
         Returns:
             The updated instances.
@@ -1025,8 +1193,6 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
         Raises:
             NotFoundError: If no instance found with same identifier as `data`.
         """
-        auto_commit = kwargs.pop("auto_commit", self.auto_commit)
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
         data_to_update: list[dict[str, Any]] = [v.to_dict() if isinstance(v, self.model_type) else v for v in data]  # type: ignore
         with wrap_sqlalchemy_exception():
             if self._dialect.update_executemany_returning and self._dialect.name != "oracle":
@@ -1042,44 +1208,62 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
                 for instance in instances:
                     self._expunge(instance, auto_expunge=auto_expunge)
                 return instances
-            await self.session.execute(
-                update(self.model_type),
-                data_to_update,
-            )
+            await self.session.execute(update(self.model_type), data_to_update)
             await self._flush_or_commit(auto_commit=auto_commit)
             return data
 
     async def list_and_count(
         self,
         *filters: FilterTypes,
+        auto_commit: bool | None = None,
+        auto_expunge: bool | None = None,
+        auto_refresh: bool | None = None,
+        statement: Select[tuple[ModelT]] | None = None,
         **kwargs: Any,
     ) -> tuple[list[ModelT], int]:
         """List records with total count.
 
         Args:
             *filters: Types for specific filtering operations.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_refresh: Refresh object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_refresh <SQLAlchemyAsyncRepository>`
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
+            statement: To facilitate customization of the underlying select query.
+                Defaults to :class:`SQLAlchemyAsyncRepository.statement <SQLAlchemyAsyncRepository>`
             **kwargs: Instance attribute value filters.
 
         Returns:
             Count of records returned by query, ignoring pagination.
         """
         if self._dialect.name in {"spanner", "spanner+spanner"}:
-            return await self._list_and_count_basic(*filters, **kwargs)
-        return await self._list_and_count_window(*filters, **kwargs)
+            return await self._list_and_count_basic(*filters, auto_expunge=auto_expunge, statement=statement, **kwargs)
+        return await self._list_and_count_window(*filters, auto_expunge=auto_expunge, statement=statement, **kwargs)
 
-    def _expunge(self, instance: ModelT, auto_expunge: bool) -> None:
+    def _expunge(self, instance: ModelT, auto_expunge: bool | None) -> None:
+        if auto_expunge is None:
+            auto_expunge = self.auto_expunge
+
         return self.session.expunge(instance) if auto_expunge else None
 
-    async def _flush_or_commit(self, auto_commit: bool) -> None:
+    async def _flush_or_commit(self, auto_commit: bool | None) -> None:
+        if auto_commit is None:
+            auto_commit = self.auto_commit
+
         return await self.session.commit() if auto_commit else await self.session.flush()
 
     async def _refresh(
         self,
         instance: ModelT,
-        auto_refresh: bool,
+        auto_refresh: bool | None,
         attribute_names: Iterable[str] | None = None,
         with_for_update: bool | None = None,
     ) -> None:
+        if auto_refresh is None:
+            auto_refresh = self.auto_refresh
+
         return (
             await self.session.refresh(instance, attribute_names=attribute_names, with_for_update=with_for_update)
             if auto_refresh
@@ -1089,22 +1273,27 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
     async def _list_and_count_window(
         self,
         *filters: FilterTypes,
+        auto_expunge: bool | None = None,
+        statement: Select[tuple[ModelT]] | None = None,
         **kwargs: Any,
     ) -> tuple[list[ModelT], int]:
         """List records with total count.
 
         Args:
             *filters: Types for specific filtering operations.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`
+            statement: To facilitate customization of the underlying select query.
+                Defaults to :class:`SQLAlchemyAsyncRepository.statement <SQLAlchemyAsyncRepository>`
             **kwargs: Instance attribute value filters.
 
         Returns:
             Count of records returned by query using an analytical window function, ignoring pagination.
         """
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
-        statement = kwargs.pop("statement", self.statement)
+        statement = statement if statement is not None else self.statement
         statement = statement.add_columns(over(sql_func.count(self.get_id_attribute_value(self.model_type))))
         statement = self._apply_filters(*filters, statement=statement)
-        statement = self._filter_select_by_kwargs(statement, **kwargs)
+        statement = self._filter_select_by_kwargs(statement, kwargs)
         with wrap_sqlalchemy_exception():
             result = await self._execute(statement)
             count: int = 0
@@ -1119,21 +1308,26 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
     async def _list_and_count_basic(
         self,
         *filters: FilterTypes,
+        auto_expunge: bool | None = None,
+        statement: Select[tuple[ModelT]] | None = None,
         **kwargs: Any,
     ) -> tuple[list[ModelT], int]:
         """List records with total count.
 
         Args:
             *filters: Types for specific filtering operations.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`
+            statement: To facilitate customization of the underlying select query.
+                Defaults to :class:`SQLAlchemyAsyncRepository.statement <SQLAlchemyAsyncRepository>`
             **kwargs: Instance attribute value filters.
 
         Returns:
             Count of records returned by query using 2 queries, ignoring pagination.
         """
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
-        statement = kwargs.pop("statement", self.statement)
+        statement = statement if statement is not None else self.statement
         statement = self._apply_filters(*filters, statement=statement)
-        statement = self._filter_select_by_kwargs(statement, **kwargs)
+        statement = self._filter_select_by_kwargs(statement, kwargs)
         count_statement = statement.with_only_columns(
             sql_func.count(self.get_id_attribute_value(self.model_type)),
             maintain_column_froms=True,
@@ -1148,34 +1342,14 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
                 instances.append(instance)
             return instances, count
 
-    async def list(self, *filters: FilterTypes, **kwargs: Any) -> list[ModelT]:
-        """Get a list of instances, optionally filtered.
-
-        Args:
-            *filters: Types for specific filtering operations.
-            **kwargs: Instance attribute value filters.
-
-        Returns:
-            The list of instances, after filtering applied.
-        """
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
-        statement = kwargs.pop("statement", self.statement)
-        statement = self._apply_filters(*filters, statement=statement)
-        statement = self._filter_select_by_kwargs(statement, **kwargs)
-
-        with wrap_sqlalchemy_exception():
-            result = await self._execute(statement)
-            instances = list(result.scalars())
-            for instance in instances:
-                self._expunge(instance, auto_expunge=auto_expunge)
-            return instances
-
     async def upsert(
         self,
         data: ModelT,
         attribute_names: Iterable[str] | None = None,
         with_for_update: bool | None = None,
-        **kwargs: Any,
+        auto_expunge: bool | None = None,
+        auto_commit: bool | None = None,
+        auto_refresh: bool | None = None,
     ) -> ModelT:
         """Update or create instance.
 
@@ -1187,8 +1361,15 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
                 existing instance exists is the value of an attribute on `data` named as value of
                 `self.id_attribute`.
             attribute_names: an iterable of attribute names to pass into the ``update`` method.
-            with_for_update: indicating FOR UPDATE should be used, or may be a dictionary containing flags to indicate a more specific set of FOR UPDATE flags for the SELECT
-            **kwargs: Instance attribute value filters.
+            with_for_update: indicating FOR UPDATE should be used, or may be a
+                dictionary containing flags to indicate a more specific set of
+                FOR UPDATE flags for the SELECT
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_refresh: Refresh object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_refresh <SQLAlchemyAsyncRepository>`
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
 
         Returns:
             The updated or created instance.
@@ -1196,9 +1377,6 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
         Raises:
             NotFoundError: If no instance found with same identifier as `data`.
         """
-        auto_commit = kwargs.pop("auto_commit", self.auto_commit)
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
-        auto_refresh = kwargs.pop("auto_refresh", self.auto_refresh)
         with wrap_sqlalchemy_exception():
             instance = await self._attach_to_session(data, strategy="merge")
             await self._flush_or_commit(auto_commit=auto_commit)
@@ -1207,6 +1385,85 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
             )
             self._expunge(instance, auto_expunge=auto_expunge)
             return instance
+
+    async def upsert_many(
+        self,
+        data: list[ModelT],
+        attribute_names: Iterable[str] | None = None,
+        with_for_update: bool | None = None,
+        auto_expunge: bool | None = None,
+        auto_commit: bool | None = None,
+        auto_refresh: bool | None = None,
+    ) -> list[ModelT]:
+        """Update or create instance.
+
+        Update instances with the attribute values present on `data`, or create a new instance if
+        one doesn't exist.
+
+        Args:
+            data: Instance to update existing, or be created. Identifier used to determine if an
+                existing instance exists is the value of an attribute on ``data`` named as value of
+                :attr:`~litestar.contrib.repository.AbstractAsyncRepository.id_attribute`.
+            attribute_names: an iterable of attribute names to pass into the ``update`` method.
+            with_for_update: indicating FOR UPDATE should be used, or may be a dictionary containing flags to indicate a more specific set of FOR UPDATE flags for the SELECT
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_refresh: Refresh object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_refresh <SQLAlchemyAsyncRepository>`
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
+
+        Returns:
+            The updated or created instance.
+
+        Raises:
+            NotFoundError: If no instance found with same identifier as ``data``.
+        """
+        instances = []
+        with wrap_sqlalchemy_exception():
+            for datum in data:
+                instance = await self._attach_to_session(datum, strategy="merge")
+                await self._flush_or_commit(auto_commit=auto_commit)
+                await self._refresh(
+                    instance,
+                    attribute_names=attribute_names,
+                    with_for_update=with_for_update,
+                    auto_refresh=auto_refresh,
+                )
+                self._expunge(instance, auto_expunge=auto_expunge)
+                instances.append(instance)
+        return instances
+
+    async def list(
+        self,
+        *filters: FilterTypes,
+        auto_expunge: bool | None = None,
+        statement: Select[tuple[ModelT]] | None = None,
+        **kwargs: Any,
+    ) -> list[ModelT]:
+        """Get a list of instances, optionally filtered.
+
+        Args:
+            *filters: Types for specific filtering operations.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`
+            statement: To facilitate customization of the underlying select query.
+                Defaults to :class:`SQLAlchemyAsyncRepository.statement <SQLAlchemyAsyncRepository>`
+            **kwargs: Instance attribute value filters.
+
+        Returns:
+            The list of instances, after filtering applied.
+        """
+        statement = statement if statement is not None else self.statement
+        statement = self._apply_filters(*filters, statement=statement)
+        statement = self._filter_select_by_kwargs(statement, kwargs)
+
+        with wrap_sqlalchemy_exception():
+            result = await self._execute(statement)
+            instances = list(result.scalars())
+            for instance in instances:
+                self._expunge(instance, auto_expunge=auto_expunge)
+            return instances
 
     def filter_collection_by_kwargs(  # type:ignore[override]
         self, collection: SelectT, /, **kwargs: Any
@@ -1229,11 +1486,18 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
             session: through which we run a check statement
 
         Returns:
-            `True` if healthy.
+            ``True`` if healthy.
         """
-        return (  # type:ignore[no-any-return]  # pragma: no cover
-            await session.execute(text("SELECT 1"))
+
+        return (  # type:ignore[no-any-return]
+            await session.execute(cls._get_health_check_statement(session))
         ).scalar_one() == 1
+
+    @staticmethod
+    def _get_health_check_statement(session: AsyncSession) -> TextClause:
+        if session.bind and session.bind.dialect.name == "oracle":
+            return text("SELECT 1 FROM DUAL")
+        return text("SELECT 1")
 
     async def _attach_to_session(self, model: ModelT, strategy: Literal["add", "merge"] = "add") -> ModelT:
         """Attach detached instance to the session.
@@ -1281,8 +1545,21 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
                     statement = self._apply_limit_offset_pagination(filter_.limit, filter_.offset, statement=statement)
             elif isinstance(filter_, BeforeAfter):
                 statement = self._filter_on_datetime_field(
-                    filter_.field_name, filter_.before, filter_.after, statement=statement
+                    field_name=filter_.field_name,
+                    before=filter_.before,
+                    after=filter_.after,
+                    statement=statement,
                 )
+            elif isinstance(filter_, OnBeforeAfter):
+                statement = self._filter_on_datetime_field(
+                    field_name=filter_.field_name,
+                    on_or_before=filter_.on_or_before,
+                    on_or_after=filter_.on_or_after,
+                    statement=statement,
+                )
+
+            elif isinstance(filter_, NotInCollectionFilter):
+                statement = self._filter_not_in_collection(filter_.field_name, filter_.values, statement=statement)
             elif isinstance(filter_, CollectionFilter):
                 statement = self._filter_in_collection(filter_.field_name, filter_.values, statement=statement)
             elif isinstance(filter_, OrderBy):
@@ -1295,6 +1572,10 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
                 statement = self._filter_by_like(
                     statement, filter_.field_name, value=filter_.value, ignore_case=bool(filter_.ignore_case)
                 )
+            elif isinstance(filter_, NotInSearchFilter):
+                statement = self._filter_by_not_like(
+                    statement, filter_.field_name, value=filter_.value, ignore_case=bool(filter_.ignore_case)
+                )
             else:
                 raise RepositoryError(f"Unexpected filter: {filter_}")
         return statement
@@ -1304,28 +1585,54 @@ class SQLAlchemyAsyncRepository(AbstractAsyncRepository[ModelT], Generic[ModelT]
             return statement
         return statement.where(getattr(self.model_type, field_name).in_(values))
 
+    def _filter_not_in_collection(self, field_name: str, values: abc.Collection[Any], statement: SelectT) -> SelectT:
+        if not values:
+            return statement
+        return statement.where(getattr(self.model_type, field_name).notin_(values))
+
     def _filter_on_datetime_field(
-        self, field_name: str, before: datetime | None, after: datetime | None, statement: SelectT
+        self,
+        field_name: str,
+        statement: SelectT,
+        before: datetime | None = None,
+        after: datetime | None = None,
+        on_or_before: datetime | None = None,
+        on_or_after: datetime | None = None,
     ) -> SelectT:
         field = getattr(self.model_type, field_name)
         if before is not None:
             statement = statement.where(field < before)
         if after is not None:
             statement = statement.where(field > after)
+        if on_or_before is not None:
+            statement = statement.where(field <= on_or_before)
+        if on_or_after is not None:
+            statement = statement.where(field >= on_or_after)
         return statement
 
-    def _filter_select_by_kwargs(self, statement: SelectT, **kwargs: Any) -> SelectT:
-        for key, val in kwargs.items():
-            statement = statement.where(getattr(self.model_type, key) == val)
+    def _filter_select_by_kwargs(
+        self, statement: SelectT, kwargs: dict[Any, Any] | Iterable[tuple[Any, Any]]
+    ) -> SelectT:
+        for key, val in kwargs.items() if isinstance(kwargs, dict) else kwargs:
+            statement = statement.where(get_instrumented_attr(self.model_type, key) == val)  # pyright: ignore
         return statement
 
-    def _filter_by_like(self, statement: SelectT, field_name: str, value: str, ignore_case: bool) -> SelectT:
-        field = getattr(self.model_type, field_name)
+    def _filter_by_like(
+        self, statement: SelectT, field_name: str | InstrumentedAttribute, value: str, ignore_case: bool
+    ) -> SelectT:
+        field = get_instrumented_attr(self.model_type, field_name)
         search_text = f"%{value}%"
         return statement.where(field.ilike(search_text) if ignore_case else field.like(search_text))
 
-    def _order_by(self, statement: SelectT, field_name: str, sort_desc: bool = False) -> SelectT:
+    def _filter_by_not_like(self, statement: SelectT, field_name: str, value: str, ignore_case: bool) -> SelectT:
         field = getattr(self.model_type, field_name)
+        search_text = f"%{value}%"
+        return statement.where(field.not_ilike(search_text) if ignore_case else field.not_like(search_text))
+
+    def _order_by(
+        self, statement: SelectT, field_name: str | InstrumentedAttribute, sort_desc: bool = False
+    ) -> SelectT:
+        field = get_instrumented_attr(self.model_type, field_name)
         return statement.order_by(field.desc() if sort_desc else field.asc())
 
 
@@ -1333,6 +1640,7 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
     """SQLAlchemy based implementation of the repository interface."""
 
     match_fields: list[str] | str | None = None
+    id_attribute: str | InstrumentedAttribute
 
     def __init__(
         self,
@@ -1370,20 +1678,24 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
     def add(
         self,
         data: ModelT,
-        **kwargs: Any,
+        auto_commit: bool | None = None,
+        auto_expunge: bool | None = None,
+        auto_refresh: bool | None = None,
     ) -> ModelT:
         """Add `data` to the collection.
 
         Args:
             data: Instance to be added to the collection.
-            **kwargs: Additional arguments.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_refresh: Refresh object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_refresh <SQLAlchemyAsyncRepository>`
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
 
         Returns:
             The added instance.
         """
-        auto_commit = kwargs.pop("auto_commit", self.auto_commit)
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
-        auto_refresh = kwargs.pop("auto_refresh", self.auto_refresh)
         with wrap_sqlalchemy_exception():
             instance = self._attach_to_session(data)
             self._flush_or_commit(auto_commit=auto_commit)
@@ -1394,19 +1706,21 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
     def add_many(
         self,
         data: list[ModelT],
-        **kwargs: Any,
+        auto_commit: bool | None = None,
+        auto_expunge: bool | None = None,
     ) -> list[ModelT]:
         """Add Many `data` to the collection.
 
         Args:
             data: list of Instances to be added to the collection.
-            **kwargs: Additional arguments.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
 
         Returns:
             The added instances.
         """
-        auto_commit = kwargs.pop("auto_commit", self.auto_commit)
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
         with wrap_sqlalchemy_exception():
             self.session.add_all(data)
             self._flush_or_commit(auto_commit=auto_commit)
@@ -1417,13 +1731,20 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
     def delete(
         self,
         item_id: Any,
-        **kwargs: Any,
+        auto_commit: bool | None = None,
+        auto_expunge: bool | None = None,
+        id_attribute: str | InstrumentedAttribute | None = None,
     ) -> ModelT:
         """Delete instance identified by ``item_id``.
 
         Args:
             item_id: Identifier of instance to be deleted.
-            **kwargs: Additional arguments.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
+            id_attribute: Allows customization of the unique identifier to use for model fetching.
+                Defaults to `id`, but can reference any surrogate or candidate key for the table.
 
         Returns:
             The deleted instance.
@@ -1431,10 +1752,8 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
         Raises:
             NotFoundError: If no instance found identified by ``item_id``.
         """
-        auto_commit = kwargs.pop("auto_commit", self.auto_commit)
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
         with wrap_sqlalchemy_exception():
-            instance = self.get(item_id)
+            instance = self.get(item_id, id_attribute=id_attribute)
             self.session.delete(instance)
             self._flush_or_commit(auto_commit=auto_commit)
             self._expunge(instance, auto_expunge=auto_expunge)
@@ -1443,46 +1762,53 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
     def delete_many(
         self,
         item_ids: list[Any],
-        **kwargs: Any,
+        auto_commit: bool | None = None,
+        auto_expunge: bool | None = None,
+        id_attribute: str | InstrumentedAttribute | None = None,
+        chunk_size: int | None = None,
     ) -> list[ModelT]:
         """Delete instance identified by `item_id`.
 
         Args:
             item_ids: Identifier of instance to be deleted.
-            **kwargs: Additional arguments.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
+            id_attribute: Allows customization of the unique identifier to use for model fetching.
+                Defaults to `id`, but can reference any surrogate or candidate key for the table.
+            chunk_size: Allows customization of the ``insertmanyvalues_max_parameters`` setting for the driver.
+                Defaults to `950` if left unset.
 
         Returns:
             The deleted instances.
 
         """
-        auto_commit = kwargs.pop("auto_commit", self.auto_commit)
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
+
         with wrap_sqlalchemy_exception():
+            id_attribute = get_instrumented_attr(
+                self.model_type, id_attribute if id_attribute is not None else self.id_attribute
+            )
             instances: list[ModelT] = []
-            chunk_size = 450
+            chunk_size = self._get_insertmanyvalues_max_parameters(chunk_size)
             for idx in range(0, len(item_ids), chunk_size):
                 chunk = item_ids[idx : min(idx + chunk_size, len(item_ids))]
                 if self._dialect.delete_executemany_returning:
                     instances.extend(
                         self.session.scalars(
-                            delete(self.model_type)
-                            .where(getattr(self.model_type, self.id_attribute).in_(chunk))
-                            .returning(self.model_type)
+                            delete(self.model_type).where(id_attribute.in_(chunk)).returning(self.model_type)
                         )
                     )
                 else:
-                    instances.extend(
-                        self.session.scalars(
-                            select(self.model_type).where(getattr(self.model_type, self.id_attribute).in_(chunk))
-                        )
-                    )
-                    self.session.execute(
-                        delete(self.model_type).where(getattr(self.model_type, self.id_attribute).in_(chunk))
-                    )
+                    instances.extend(self.session.scalars(select(self.model_type).where(id_attribute.in_(chunk))))
+                    self.session.execute(delete(self.model_type).where(id_attribute.in_(chunk)))
             self._flush_or_commit(auto_commit=auto_commit)
             for instance in instances:
                 self._expunge(instance, auto_expunge=auto_expunge)
             return instances
+
+    def _get_insertmanyvalues_max_parameters(self, chunk_size: int | None = None) -> int:
+        return chunk_size if chunk_size is not None else DEFAULT_INSERTMANYVALUES_MAX_PARAMETERS
 
     def exists(self, **kwargs: Any) -> bool:
         """Return true if the object specified by ``kwargs`` exists.
@@ -1497,12 +1823,23 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
         existing = self.count(**kwargs)
         return existing > 0
 
-    def get(self, item_id: Any, **kwargs: Any) -> ModelT:
+    def get(  # type: ignore[override]
+        self,
+        item_id: Any,
+        auto_expunge: bool | None = None,
+        statement: Select[tuple[ModelT]] | None = None,
+        id_attribute: str | InstrumentedAttribute | None = None,
+    ) -> ModelT:
         """Get instance identified by `item_id`.
 
         Args:
             item_id: Identifier of the instance to be retrieved.
-            **kwargs: Additional parameters
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`
+            statement: To facilitate customization of the underlying select query.
+                Defaults to :class:`SQLAlchemyAsyncRepository.statement <SQLAlchemyAsyncRepository>`
+            id_attribute: Allows customization of the unique identifier to use for model fetching.
+                Defaults to `id`, but can reference any surrogate or candidate key for the table.
 
         Returns:
             The retrieved instance.
@@ -1510,19 +1847,28 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
         Raises:
             NotFoundError: If no instance found identified by `item_id`.
         """
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
         with wrap_sqlalchemy_exception():
-            statement = kwargs.pop("statement", self.statement)
-            statement = self._filter_select_by_kwargs(statement=statement, **{self.id_attribute: item_id})
+            id_attribute = id_attribute if id_attribute is not None else self.id_attribute
+            statement = statement if statement is not None else self.statement
+            statement = self._filter_select_by_kwargs(statement=statement, kwargs=[(id_attribute, item_id)])
             instance = (self._execute(statement)).scalar_one_or_none()
             instance = self.check_not_found(instance)
             self._expunge(instance, auto_expunge=auto_expunge)
             return instance
 
-    def get_one(self, **kwargs: Any) -> ModelT:
+    def get_one(
+        self,
+        auto_expunge: bool | None = None,
+        statement: Select[tuple[ModelT]] | None = None,
+        **kwargs: Any,
+    ) -> ModelT:
         """Get instance identified by ``kwargs``.
 
         Args:
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`
+            statement: To facilitate customization of the underlying select query.
+                Defaults to :class:`SQLAlchemyAsyncRepository.statement <SQLAlchemyAsyncRepository>`
             **kwargs: Identifier of the instance to be retrieved.
 
         Returns:
@@ -1531,32 +1877,39 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
         Raises:
             NotFoundError: If no instance found identified by `item_id`.
         """
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
         with wrap_sqlalchemy_exception():
-            statement = kwargs.pop("statement", self.statement)
-            statement = self._filter_select_by_kwargs(statement=statement, **kwargs)
+            statement = statement if statement is not None else self.statement
+            statement = self._filter_select_by_kwargs(statement=statement, kwargs=kwargs)
             instance = (self._execute(statement)).scalar_one_or_none()
             instance = self.check_not_found(instance)
             self._expunge(instance, auto_expunge=auto_expunge)
             return instance
 
-    def get_one_or_none(self, **kwargs: Any) -> ModelT | None:
+    def get_one_or_none(
+        self,
+        auto_expunge: bool | None = None,
+        statement: Select[tuple[ModelT]] | None = None,
+        **kwargs: Any,
+    ) -> ModelT | None:
         """Get instance identified by ``kwargs`` or None if not found.
 
         Args:
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`
+            statement: To facilitate customization of the underlying select query.
+                Defaults to :class:`SQLAlchemyAsyncRepository.statement <SQLAlchemyAsyncRepository>`
             **kwargs: Identifier of the instance to be retrieved.
 
         Returns:
             The retrieved instance or None
         """
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
         with wrap_sqlalchemy_exception():
-            statement = kwargs.pop("statement", self.statement)
-            statement = self._filter_select_by_kwargs(statement=statement, **kwargs)
+            statement = statement if statement is not None else self.statement
+            statement = self._filter_select_by_kwargs(statement=statement, kwargs=kwargs)
             instance = (self._execute(statement)).scalar_one_or_none()
             if instance:
                 self._expunge(instance, auto_expunge=auto_expunge)
-            return instance  # type: ignore
+            return instance
 
     def get_or_create(
         self,
@@ -1564,23 +1917,36 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
         upsert: bool = True,
         attribute_names: Iterable[str] | None = None,
         with_for_update: bool | None = None,
+        auto_commit: bool | None = None,
+        auto_expunge: bool | None = None,
+        auto_refresh: bool | None = None,
         **kwargs: Any,
     ) -> tuple[ModelT, bool]:
         """Get instance identified by ``kwargs`` or create if it doesn't exist.
 
         Args:
-            match_fields: a list of keys to use to match the existing model.  When empty, all fields are matched.
-            upsert: When using match_fields and actual model values differ from `kwargs`, perform an update operation on the model.
-            attribute_names: an iterable of attribute names to pass into the ``update`` method.
-            with_for_update: indicating FOR UPDATE should be used, or may be a dictionary containing flags to indicate a more specific set of FOR UPDATE flags for the SELECT
+            match_fields: a list of keys to use to match the existing model.  When
+                empty, all fields are matched.
+            upsert: When using match_fields and actual model values differ from
+                `kwargs`, perform an update operation on the model.
+            attribute_names: an iterable of attribute names to pass into the ``update``
+                method.
+            with_for_update: indicating FOR UPDATE should be used, or may be a
+                dictionary containing flags to indicate a more specific set of
+                FOR UPDATE flags for the SELECT
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_refresh: Refresh object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_refresh <SQLAlchemyAsyncRepository>`
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
             **kwargs: Identifier of the instance to be retrieved.
 
         Returns:
-            a tuple that includes the instance and whether or not it needed to be created.  When using match_fields and actual model values differ from `kwargs`, the model value will be updated.
+            a tuple that includes the instance and whether it needed to be created.
+            When using match_fields and actual model values differ from ``kwargs``, the
+            model value will be updated.
         """
-        auto_commit = kwargs.pop("auto_commit", self.auto_commit)
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
-        auto_refresh = kwargs.pop("auto_refresh", self.auto_refresh)
         match_fields = match_fields or self.match_fields
         if isinstance(match_fields, str):
             match_fields = [match_fields]
@@ -1608,23 +1974,30 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
             self._expunge(existing, auto_expunge=auto_expunge)
         return existing, False
 
-    def count(self, *filters: FilterTypes, **kwargs: Any) -> int:
+    def count(
+        self,
+        *filters: FilterTypes,
+        statement: Select[tuple[ModelT]] | None = None,
+        **kwargs: Any,
+    ) -> int:
         """Get the count of records returned by a query.
 
         Args:
             *filters: Types for specific filtering operations.
+            statement: To facilitate customization of the underlying select query.
+                Defaults to :class:`SQLAlchemyAsyncRepository.statement <SQLAlchemyAsyncRepository>`
             **kwargs: Instance attribute value filters.
 
         Returns:
             Count of records returned by query, ignoring pagination.
         """
-        statement = kwargs.pop("statement", self.statement)
+        statement = statement if statement is not None else self.statement
         statement = statement.with_only_columns(
             sql_func.count(self.get_id_attribute_value(self.model_type)),
             maintain_column_froms=True,
         ).order_by(None)
         statement = self._apply_filters(*filters, apply_pagination=False, statement=statement)
-        statement = self._filter_select_by_kwargs(statement, **kwargs)
+        statement = self._filter_select_by_kwargs(statement, kwargs)
         results = self._execute(statement)
         return results.scalar_one()  # type: ignore
 
@@ -1633,16 +2006,29 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
         data: ModelT,
         attribute_names: Iterable[str] | None = None,
         with_for_update: bool | None = None,
-        **kwargs: Any,
+        auto_commit: bool | None = None,
+        auto_expunge: bool | None = None,
+        auto_refresh: bool | None = None,
+        id_attribute: str | InstrumentedAttribute | None = None,
     ) -> ModelT:
         """Update instance with the attribute values present on `data`.
 
         Args:
-            data: An instance that should have a value for `self.id_attribute` that exists in the
-                collection.
-            attribute_names: an iterable of attribute names to pass into the ``update`` method.
-            with_for_update: indicating FOR UPDATE should be used, or may be a dictionary containing flags to indicate a more specific set of FOR UPDATE flags for the SELECT
-            **kwargs: Additional arguments.
+            data: An instance that should have a value for `self.id_attribute` that
+                exists in the collection.
+            attribute_names: an iterable of attribute names to pass into the ``update``
+                method.
+            with_for_update: indicating FOR UPDATE should be used, or may be a
+                dictionary containing flags to indicate a more specific set of
+                FOR UPDATE flags for the SELECT
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_refresh: Refresh object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_refresh <SQLAlchemyAsyncRepository>`
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
+            id_attribute: Allows customization of the unique identifier to use for model fetching.
+                Defaults to `id`, but can reference any surrogate or candidate key for the table.
 
         Returns:
             The updated instance.
@@ -1650,13 +2036,12 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
         Raises:
             NotFoundError: If no instance found with same identifier as `data`.
         """
-        auto_commit = kwargs.pop("auto_commit", self.auto_commit)
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
-        auto_refresh = kwargs.pop("auto_refresh", self.auto_refresh)
         with wrap_sqlalchemy_exception():
-            item_id = self.get_id_attribute_value(data)
+            item_id = self.get_id_attribute_value(
+                data, id_attribute=id_attribute.key if isinstance(id_attribute, InstrumentedAttribute) else id_attribute
+            )
             # this will raise for not found, and will put the item in the session
-            self.get(item_id)
+            self.get(item_id, id_attribute=id_attribute)
             # this will merge the inbound data to the instance we just put in the session
             instance = self._attach_to_session(data, strategy="merge")
             self._flush_or_commit(auto_commit=auto_commit)
@@ -1669,18 +2054,22 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
     def update_many(
         self,
         data: list[ModelT],
-        **kwargs: Any,
+        auto_commit: bool | None = None,
+        auto_expunge: bool | None = None,
     ) -> list[ModelT]:
         """Update one or more instances with the attribute values present on `data`.
 
-        This function has an optimized bulk insert based on the configured SQL dialect:
-        - For backends supporting `RETURNING` with `executemany`, a single bulk insert with returning clause is executed.
-        - For other backends, it does a bulk insert and then selects the inserted records
+        This function has an optimized bulk update based on the configured SQL dialect:
+        - For backends supporting `RETURNING` with `executemany`, a single bulk update with returning clause is executed.
+        - For other backends, it does a bulk update and then returns the updated data after a refresh.
 
         Args:
             data: A list of instances to update.  Each should have a value for `self.id_attribute` that exists in the
                 collection.
-            **kwargs: Additional arguments.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
 
         Returns:
             The updated instances.
@@ -1688,8 +2077,6 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
         Raises:
             NotFoundError: If no instance found with same identifier as `data`.
         """
-        auto_commit = kwargs.pop("auto_commit", self.auto_commit)
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
         data_to_update: list[dict[str, Any]] = [v.to_dict() if isinstance(v, self.model_type) else v for v in data]  # type: ignore
         with wrap_sqlalchemy_exception():
             if self._dialect.update_executemany_returning and self._dialect.name != "oracle":
@@ -1705,44 +2092,62 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
                 for instance in instances:
                     self._expunge(instance, auto_expunge=auto_expunge)
                 return instances
-            self.session.execute(
-                update(self.model_type),
-                data_to_update,
-            )
+            self.session.execute(update(self.model_type), data_to_update)
             self._flush_or_commit(auto_commit=auto_commit)
             return data
 
     def list_and_count(
         self,
         *filters: FilterTypes,
+        auto_commit: bool | None = None,
+        auto_expunge: bool | None = None,
+        auto_refresh: bool | None = None,
+        statement: Select[tuple[ModelT]] | None = None,
         **kwargs: Any,
     ) -> tuple[list[ModelT], int]:
         """List records with total count.
 
         Args:
             *filters: Types for specific filtering operations.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_refresh: Refresh object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_refresh <SQLAlchemyAsyncRepository>`
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
+            statement: To facilitate customization of the underlying select query.
+                Defaults to :class:`SQLAlchemyAsyncRepository.statement <SQLAlchemyAsyncRepository>`
             **kwargs: Instance attribute value filters.
 
         Returns:
             Count of records returned by query, ignoring pagination.
         """
         if self._dialect.name in {"spanner", "spanner+spanner"}:
-            return self._list_and_count_basic(*filters, **kwargs)
-        return self._list_and_count_window(*filters, **kwargs)
+            return self._list_and_count_basic(*filters, auto_expunge=auto_expunge, statement=statement, **kwargs)
+        return self._list_and_count_window(*filters, auto_expunge=auto_expunge, statement=statement, **kwargs)
 
-    def _expunge(self, instance: ModelT, auto_expunge: bool) -> None:
+    def _expunge(self, instance: ModelT, auto_expunge: bool | None) -> None:
+        if auto_expunge is None:
+            auto_expunge = self.auto_expunge
+
         return self.session.expunge(instance) if auto_expunge else None
 
-    def _flush_or_commit(self, auto_commit: bool) -> None:
+    def _flush_or_commit(self, auto_commit: bool | None) -> None:
+        if auto_commit is None:
+            auto_commit = self.auto_commit
+
         return self.session.commit() if auto_commit else self.session.flush()
 
     def _refresh(
         self,
         instance: ModelT,
-        auto_refresh: bool,
+        auto_refresh: bool | None,
         attribute_names: Iterable[str] | None = None,
         with_for_update: bool | None = None,
     ) -> None:
+        if auto_refresh is None:
+            auto_refresh = self.auto_refresh
+
         return (
             self.session.refresh(instance, attribute_names=attribute_names, with_for_update=with_for_update)
             if auto_refresh
@@ -1752,22 +2157,27 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
     def _list_and_count_window(
         self,
         *filters: FilterTypes,
+        auto_expunge: bool | None = None,
+        statement: Select[tuple[ModelT]] | None = None,
         **kwargs: Any,
     ) -> tuple[list[ModelT], int]:
         """List records with total count.
 
         Args:
             *filters: Types for specific filtering operations.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`
+            statement: To facilitate customization of the underlying select query.
+                Defaults to :class:`SQLAlchemyAsyncRepository.statement <SQLAlchemyAsyncRepository>`
             **kwargs: Instance attribute value filters.
 
         Returns:
             Count of records returned by query using an analytical window function, ignoring pagination.
         """
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
-        statement = kwargs.pop("statement", self.statement)
+        statement = statement if statement is not None else self.statement
         statement = statement.add_columns(over(sql_func.count(self.get_id_attribute_value(self.model_type))))
         statement = self._apply_filters(*filters, statement=statement)
-        statement = self._filter_select_by_kwargs(statement, **kwargs)
+        statement = self._filter_select_by_kwargs(statement, kwargs)
         with wrap_sqlalchemy_exception():
             result = self._execute(statement)
             count: int = 0
@@ -1782,21 +2192,26 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
     def _list_and_count_basic(
         self,
         *filters: FilterTypes,
+        auto_expunge: bool | None = None,
+        statement: Select[tuple[ModelT]] | None = None,
         **kwargs: Any,
     ) -> tuple[list[ModelT], int]:
         """List records with total count.
 
         Args:
             *filters: Types for specific filtering operations.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`
+            statement: To facilitate customization of the underlying select query.
+                Defaults to :class:`SQLAlchemyAsyncRepository.statement <SQLAlchemyAsyncRepository>`
             **kwargs: Instance attribute value filters.
 
         Returns:
             Count of records returned by query using 2 queries, ignoring pagination.
         """
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
-        statement = kwargs.pop("statement", self.statement)
+        statement = statement if statement is not None else self.statement
         statement = self._apply_filters(*filters, statement=statement)
-        statement = self._filter_select_by_kwargs(statement, **kwargs)
+        statement = self._filter_select_by_kwargs(statement, kwargs)
         count_statement = statement.with_only_columns(
             sql_func.count(self.get_id_attribute_value(self.model_type)),
             maintain_column_froms=True,
@@ -1811,34 +2226,14 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
                 instances.append(instance)
             return instances, count
 
-    def list(self, *filters: FilterTypes, **kwargs: Any) -> list[ModelT]:
-        """Get a list of instances, optionally filtered.
-
-        Args:
-            *filters: Types for specific filtering operations.
-            **kwargs: Instance attribute value filters.
-
-        Returns:
-            The list of instances, after filtering applied.
-        """
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
-        statement = kwargs.pop("statement", self.statement)
-        statement = self._apply_filters(*filters, statement=statement)
-        statement = self._filter_select_by_kwargs(statement, **kwargs)
-
-        with wrap_sqlalchemy_exception():
-            result = self._execute(statement)
-            instances = list(result.scalars())
-            for instance in instances:
-                self._expunge(instance, auto_expunge=auto_expunge)
-            return instances
-
     def upsert(
         self,
         data: ModelT,
         attribute_names: Iterable[str] | None = None,
         with_for_update: bool | None = None,
-        **kwargs: Any,
+        auto_expunge: bool | None = None,
+        auto_commit: bool | None = None,
+        auto_refresh: bool | None = None,
     ) -> ModelT:
         """Update or create instance.
 
@@ -1850,8 +2245,15 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
                 existing instance exists is the value of an attribute on `data` named as value of
                 `self.id_attribute`.
             attribute_names: an iterable of attribute names to pass into the ``update`` method.
-            with_for_update: indicating FOR UPDATE should be used, or may be a dictionary containing flags to indicate a more specific set of FOR UPDATE flags for the SELECT
-            **kwargs: Instance attribute value filters.
+            with_for_update: indicating FOR UPDATE should be used, or may be a
+                dictionary containing flags to indicate a more specific set of
+                FOR UPDATE flags for the SELECT
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_refresh: Refresh object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_refresh <SQLAlchemyAsyncRepository>`
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
 
         Returns:
             The updated or created instance.
@@ -1859,9 +2261,6 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
         Raises:
             NotFoundError: If no instance found with same identifier as `data`.
         """
-        auto_commit = kwargs.pop("auto_commit", self.auto_commit)
-        auto_expunge = kwargs.pop("auto_expunge", self.auto_expunge)
-        auto_refresh = kwargs.pop("auto_refresh", self.auto_refresh)
         with wrap_sqlalchemy_exception():
             instance = self._attach_to_session(data, strategy="merge")
             self._flush_or_commit(auto_commit=auto_commit)
@@ -1870,6 +2269,85 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
             )
             self._expunge(instance, auto_expunge=auto_expunge)
             return instance
+
+    def upsert_many(
+        self,
+        data: list[ModelT],
+        attribute_names: Iterable[str] | None = None,
+        with_for_update: bool | None = None,
+        auto_expunge: bool | None = None,
+        auto_commit: bool | None = None,
+        auto_refresh: bool | None = None,
+    ) -> list[ModelT]:
+        """Update or create instance.
+
+        Update instances with the attribute values present on `data`, or create a new instance if
+        one doesn't exist.
+
+        Args:
+            data: Instance to update existing, or be created. Identifier used to determine if an
+                existing instance exists is the value of an attribute on ``data`` named as value of
+                :attr:`~litestar.contrib.repository.AbstractAsyncRepository.id_attribute`.
+            attribute_names: an iterable of attribute names to pass into the ``update`` method.
+            with_for_update: indicating FOR UPDATE should be used, or may be a dictionary containing flags to indicate a more specific set of FOR UPDATE flags for the SELECT
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`.
+            auto_refresh: Refresh object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_refresh <SQLAlchemyAsyncRepository>`
+            auto_commit: Commit objects before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_commit <SQLAlchemyAsyncRepository>`
+
+        Returns:
+            The updated or created instance.
+
+        Raises:
+            NotFoundError: If no instance found with same identifier as ``data``.
+        """
+        instances = []
+        with wrap_sqlalchemy_exception():
+            for datum in data:
+                instance = self._attach_to_session(datum, strategy="merge")
+                self._flush_or_commit(auto_commit=auto_commit)
+                self._refresh(
+                    instance,
+                    attribute_names=attribute_names,
+                    with_for_update=with_for_update,
+                    auto_refresh=auto_refresh,
+                )
+                self._expunge(instance, auto_expunge=auto_expunge)
+                instances.append(instance)
+        return instances
+
+    def list(
+        self,
+        *filters: FilterTypes,
+        auto_expunge: bool | None = None,
+        statement: Select[tuple[ModelT]] | None = None,
+        **kwargs: Any,
+    ) -> list[ModelT]:
+        """Get a list of instances, optionally filtered.
+
+        Args:
+            *filters: Types for specific filtering operations.
+            auto_expunge: Remove object from session before returning. Defaults to
+                :class:`SQLAlchemyAsyncRepository.auto_expunge <SQLAlchemyAsyncRepository>`
+            statement: To facilitate customization of the underlying select query.
+                Defaults to :class:`SQLAlchemyAsyncRepository.statement <SQLAlchemyAsyncRepository>`
+            **kwargs: Instance attribute value filters.
+
+        Returns:
+            The list of instances, after filtering applied.
+        """
+        statement = statement if statement is not None else self.statement
+        statement = self._apply_filters(*filters, statement=statement)
+        statement = self._filter_select_by_kwargs(statement, kwargs)
+
+        with wrap_sqlalchemy_exception():
+            result = self._execute(statement)
+            instances = list(result.scalars())
+            for instance in instances:
+                self._expunge(instance, auto_expunge=auto_expunge)
+            return instances
 
     def filter_collection_by_kwargs(  # type:ignore[override]
         self, collection: SelectT, /, **kwargs: Any
@@ -1892,11 +2370,18 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
             session: through which we run a check statement
 
         Returns:
-            `True` if healthy.
+            ``True`` if healthy.
         """
-        return (  # type:ignore[no-any-return]  # pragma: no cover
-            session.execute(text("SELECT 1"))
+
+        return (  # type:ignore[no-any-return]
+            session.execute(cls._get_health_check_statement(session))
         ).scalar_one() == 1
+
+    @staticmethod
+    def _get_health_check_statement(session: Session) -> TextClause:
+        if session.bind and session.bind.dialect.name == "oracle":
+            return text("SELECT 1 FROM DUAL")
+        return text("SELECT 1")
 
     def _attach_to_session(self, model: ModelT, strategy: Literal["add", "merge"] = "add") -> ModelT:
         """Attach detached instance to the session.
@@ -1944,8 +2429,21 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
                     statement = self._apply_limit_offset_pagination(filter_.limit, filter_.offset, statement=statement)
             elif isinstance(filter_, BeforeAfter):
                 statement = self._filter_on_datetime_field(
-                    filter_.field_name, filter_.before, filter_.after, statement=statement
+                    field_name=filter_.field_name,
+                    before=filter_.before,
+                    after=filter_.after,
+                    statement=statement,
                 )
+            elif isinstance(filter_, OnBeforeAfter):
+                statement = self._filter_on_datetime_field(
+                    field_name=filter_.field_name,
+                    on_or_before=filter_.on_or_before,
+                    on_or_after=filter_.on_or_after,
+                    statement=statement,
+                )
+
+            elif isinstance(filter_, NotInCollectionFilter):
+                statement = self._filter_not_in_collection(filter_.field_name, filter_.values, statement=statement)
             elif isinstance(filter_, CollectionFilter):
                 statement = self._filter_in_collection(filter_.field_name, filter_.values, statement=statement)
             elif isinstance(filter_, OrderBy):
@@ -1958,6 +2456,10 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
                 statement = self._filter_by_like(
                     statement, filter_.field_name, value=filter_.value, ignore_case=bool(filter_.ignore_case)
                 )
+            elif isinstance(filter_, NotInSearchFilter):
+                statement = self._filter_by_not_like(
+                    statement, filter_.field_name, value=filter_.value, ignore_case=bool(filter_.ignore_case)
+                )
             else:
                 raise RepositoryError(f"Unexpected filter: {filter_}")
         return statement
@@ -1967,26 +2469,52 @@ class SQLAlchemySyncRepository(AbstractSyncRepository[ModelT], Generic[ModelT]):
             return statement
         return statement.where(getattr(self.model_type, field_name).in_(values))
 
+    def _filter_not_in_collection(self, field_name: str, values: abc.Collection[Any], statement: SelectT) -> SelectT:
+        if not values:
+            return statement
+        return statement.where(getattr(self.model_type, field_name).notin_(values))
+
     def _filter_on_datetime_field(
-        self, field_name: str, before: datetime | None, after: datetime | None, statement: SelectT
+        self,
+        field_name: str,
+        statement: SelectT,
+        before: datetime | None = None,
+        after: datetime | None = None,
+        on_or_before: datetime | None = None,
+        on_or_after: datetime | None = None,
     ) -> SelectT:
         field = getattr(self.model_type, field_name)
         if before is not None:
             statement = statement.where(field < before)
         if after is not None:
             statement = statement.where(field > after)
+        if on_or_before is not None:
+            statement = statement.where(field <= on_or_before)
+        if on_or_after is not None:
+            statement = statement.where(field >= on_or_after)
         return statement
 
-    def _filter_select_by_kwargs(self, statement: SelectT, **kwargs: Any) -> SelectT:
-        for key, val in kwargs.items():
-            statement = statement.where(getattr(self.model_type, key) == val)
+    def _filter_select_by_kwargs(
+        self, statement: SelectT, kwargs: dict[Any, Any] | Iterable[tuple[Any, Any]]
+    ) -> SelectT:
+        for key, val in kwargs.items() if isinstance(kwargs, dict) else kwargs:
+            statement = statement.where(get_instrumented_attr(self.model_type, key) == val)  # pyright: ignore
         return statement
 
-    def _filter_by_like(self, statement: SelectT, field_name: str, value: str, ignore_case: bool) -> SelectT:
-        field = getattr(self.model_type, field_name)
+    def _filter_by_like(
+        self, statement: SelectT, field_name: str | InstrumentedAttribute, value: str, ignore_case: bool
+    ) -> SelectT:
+        field = get_instrumented_attr(self.model_type, field_name)
         search_text = f"%{value}%"
         return statement.where(field.ilike(search_text) if ignore_case else field.like(search_text))
 
-    def _order_by(self, statement: SelectT, field_name: str, sort_desc: bool = False) -> SelectT:
+    def _filter_by_not_like(self, statement: SelectT, field_name: str, value: str, ignore_case: bool) -> SelectT:
         field = getattr(self.model_type, field_name)
+        search_text = f"%{value}%"
+        return statement.where(field.not_ilike(search_text) if ignore_case else field.not_like(search_text))
+
+    def _order_by(
+        self, statement: SelectT, field_name: str | InstrumentedAttribute, sort_desc: bool = False
+    ) -> SelectT:
+        field = get_instrumented_attr(self.model_type, field_name)
         return statement.order_by(field.desc() if sort_desc else field.asc())
