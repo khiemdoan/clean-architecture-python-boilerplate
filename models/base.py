@@ -10,13 +10,14 @@ __email__ = 'doankhiem.crazy@gmail.com'
 """Application ORM configuration."""
 
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, ClassVar, Protocol, runtime_checkable
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import AnyHttpUrl, AnyUrl, EmailStr
-from sqlalchemy import BigInteger, DateTime, FromClause, MetaData, String, func
+from sqlalchemy import BigInteger, Date, DateTime, MetaData, String, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column, registry
+from sqlalchemy.sql import FromClause
 
 same_as = lambda col: lambda ctx: ctx.current_parameters.get(col)
 
@@ -50,7 +51,7 @@ class ModelProtocol(Protocol):
 class UUIDPrimaryKey:
     """UUID Primary Key Field Mixin."""
 
-    id: Mapped[UUID] = mapped_column(primary_key=True, server_default=func.gen_random_uuid())
+    id: Mapped[UUID] = mapped_column(server_default=func.gen_random_uuid(), default=uuid4, primary_key=True)  # pyright: ignore
     """UUID Primary key column."""
 
 
@@ -58,7 +59,6 @@ class BigIntPrimaryKey:
     """BigInt Primary Key Field Mixin."""
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-
 
 class AuditColumns:
     """Created/Updated At Fields Mixin."""
@@ -87,6 +87,7 @@ def create_registry() -> registry:
             EmailStr: String,
             AnyUrl: String,
             AnyHttpUrl: String,
+            date: Date,
         },
     )
 
@@ -114,7 +115,7 @@ class Model(DeclarativeBase):
         Returns:
             dict[str, Any]: A dict representation of the model
         """
-        exclude = {"_sentinel"}.union(self._sa_instance_state.unloaded).union(exclude or [])  # type: ignore[attr-defined]
+        exclude = {"sa_orm_sentinel", "_sentinel"}.union(self._sa_instance_state.unloaded).union(exclude or [])  # type: ignore[attr-defined]
         return {field.name: getattr(self, field.name) for field in self.__table__.columns if field.name not in exclude}
 
 
