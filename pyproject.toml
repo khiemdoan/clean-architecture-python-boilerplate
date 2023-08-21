@@ -9,15 +9,16 @@ packages = [{include = "clean_architecture_python_boilerplate"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
-pydantic = "2.0.2"
-pydantic-settings = "2.0.1"
+loguru = "0.7.0"
+pydantic = "2.2.1"
+pydantic-settings = "2.0.3"
 Jinja2 = "3.1.2"
-SQLAlchemy = {version = "2.0.18", extras = ["asyncio"]}
-alembic = "1.11.1"
-psycopg = {version = "3.1.9", extras = ["binary", "pool"]}
-redis = "4.6.0"
+SQLAlchemy = {version = "2.0.20", extras = ["asyncio"]}
+alembic = "1.11.3"
+psycopg = {version = "3.1.10", extras = ["binary", "pool"]}
+redis = "5.0.0"
 httpx = "0.24.1"
-apscheduler = "3.10.1"
+apscheduler = "3.10.4"
 python-telegram-bot = "20.4"
 
 [tool.poetry.group.dev.dependencies]
