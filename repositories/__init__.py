@@ -2,9 +2,18 @@
 __author__ = 'Khiem Doan'
 __github__ = 'https://github.com/khiemdoan'
 __email__ = 'doankhiem.crazy@gmail.com'
+__url__ = 'https://github.com/khiemdoan/clean-architecture-python-boilerplate/blob/main/repositories/__init__.py'
 
 __all__ = [
-    'BeforeAfter', 'CollectionFilter', 'LimitOffset', 'OrderBy', 'SearchFilter',
+    'BeforeAfter', 'OnBeforeAfter',
+    'CollectionFilter', 'NotInCollectionFilter',
+    'SearchFilter', 'NotInSearchFilter',
+    'LimitOffset',
+    'OrderBy',
 ]
 
-from .base import BeforeAfter, CollectionFilter, LimitOffset, OrderBy, SearchFilter
+from advanced_alchemy.filters import (BeforeAfter, CollectionFilter, LimitOffset, NotInCollectionFilter,
+                                      NotInSearchFilter, OnBeforeAfter, OrderBy, SearchFilter)
+
+# Using `advanced_alchemy` to define repository classes.
+
