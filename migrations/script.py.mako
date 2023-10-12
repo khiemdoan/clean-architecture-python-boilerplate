@@ -4,6 +4,7 @@ Revises: ${down_revision | comma,n}
 Create Date: ${create_date}
 """
 
+import advanced_alchemy
 import sqlalchemy as sa
 from alembic import op
 ${imports if imports else ""}
