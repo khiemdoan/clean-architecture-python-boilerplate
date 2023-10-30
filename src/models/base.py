@@ -19,7 +19,8 @@ from uuid import UUID, uuid4
 from advanced_alchemy.types import GUID, BigIntIdentity, DateTimeUTC, JsonB
 from sqlalchemy import Date, MetaData, Sequence, String, func
 from sqlalchemy.event import listens_for
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, declared_attr, mapped_column, orm_insert_sentinel, registry
+from sqlalchemy.orm import (DeclarativeBase, Mapped, Mapper, Session, declared_attr, mapped_column, orm_insert_sentinel,
+                            registry)
 from sqlalchemy.sql import FromClause
 from sqlalchemy.sql.schema import _NamingSchemaParameter as NamingSchemaParameter
 from sqlalchemy.types import TypeEngine
@@ -44,7 +45,11 @@ __all__ = (
 UUIDBaseT = TypeVar("UUIDBaseT", bound="UUIDBase")
 BigIntBaseT = TypeVar("BigIntBaseT", bound="BigIntBase")
 
-same_as = lambda col: lambda ctx: ctx.current_parameters.get(col)
+
+def same_as(column_name):
+    def default_function(context):
+        return context.current_parameters.get(column_name)
+    return default_function
 
 
 convention: NamingSchemaParameter = {
@@ -79,6 +84,7 @@ class ModelProtocol(Protocol):
     """The base SQLAlchemy model protocol."""
 
     __table__: FromClause
+    __mapper__: Mapper
     __name__: ClassVar[str]
 
     def to_dict(self, exclude: set[str] | None = None) -> dict[str, Any]:
@@ -157,6 +163,8 @@ class Model(DeclarativeBase):
 
     __name__: ClassVar[str]
     __table__: FromClause
+    __mapper__: Mapper
+
     registry = orm_registry
 
     # noinspection PyMethodParameters
