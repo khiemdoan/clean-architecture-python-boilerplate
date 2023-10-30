@@ -17,23 +17,23 @@ dependencies = [
     "pydantic-settings>=2.0.3",
     "psycopg[binary,pool]>=3.1.12",
     "SQLAlchemy[asyncio]>=2.0.22",
-    "alembic>=1.12.0",
-    "advanced-alchemy>=0.3.2",
+    "alembic>=1.12.1",
+    "advanced-alchemy>=0.5.1",
     "Jinja2>=3.1.2",
-    "redis>=5.0.1",
+    "redis[hiredis]>=5.0.1",
     "httpx>=0.25.0",
     "apscheduler>=3.10.4",
     "python-telegram-bot>=20.6",
 ]
 
 [tool.pdm.dev-dependencies]
-test = [
+testing = [
     "pytest",
     "pytest-asyncio",
     "icecream",
     "reloadium",
 ]
-lint = [
+linting = [
     "isort",
     "ruff",
 ]
