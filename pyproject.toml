@@ -47,4 +47,6 @@ line_length = 150
 [tool.ruff]
 line-length = 150
 
-
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
