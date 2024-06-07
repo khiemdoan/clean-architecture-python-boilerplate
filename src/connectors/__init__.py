@@ -5,7 +5,9 @@ __url__ = 'https://github.com/khiemdoan/clean-architecture-python-boilerplate/bl
 
 __all__ = [
     'Database',
+    'DbAsyncSession',
+    'DbSyncSession',
 ]
 
 
-from .database import Database
+from .database import Database, DbAsyncSession, DbSyncSession
