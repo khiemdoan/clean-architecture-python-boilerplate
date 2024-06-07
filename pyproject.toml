@@ -42,10 +42,10 @@ linting = [
 ]
 
 [tool.isort]
-line_length = 150
+line_length = 120
 
 [tool.ruff]
-line-length = 150
+line-length = 120
 
 [tool.ruff.format]
 quote-style = "single"
