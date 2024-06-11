@@ -1,13 +1,11 @@
-
 __author__ = 'Khiem Doan'
 __github__ = 'https://github.com/khiemdoan'
 __email__ = 'doankhiem.crazy@gmail.com'
 __url__ = 'https://github.com/khiemdoan/clean-architecture-python-boilerplate/blob/main/src/settings/postgres.py'
 
-from functools import lru_cache
 from urllib.parse import quote_plus
 
-from pydantic import Field, PostgresDsn, ValidationError
+from pydantic import Field, PostgresDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,7 +17,12 @@ class PostgresSettings(BaseSettings):
     database: str
     debug: bool = False
 
-    model_config = SettingsConfigDict(extra='ignore', env_prefix='POSTGRES_')
+    model_config = SettingsConfigDict(
+        extra='ignore',
+        env_prefix='POSTGRES_',
+        env_file='.env',
+        env_file_encoding='utf-8',
+    )
 
     @property
     def url(self) -> PostgresDsn:
@@ -29,13 +32,3 @@ class PostgresSettings(BaseSettings):
         host = self.host
         port = self.port
         return f'{scheme}://{user}:{password}@{host}:{port}/{self.database}'
-
-
-@lru_cache
-def get_postgres_settings() -> PostgresSettings:
-    try:
-        return PostgresSettings()
-    except ValidationError:
-        pass
-
-    return PostgresSettings(_env_file='.env')

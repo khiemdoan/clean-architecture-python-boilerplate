@@ -1,13 +1,11 @@
-
 __author__ = 'Khiem Doan'
 __github__ = 'https://github.com/khiemdoan'
 __email__ = 'doankhiem.crazy@gmail.com'
 __url__ = 'https://github.com/khiemdoan/clean-architecture-python-boilerplate/blob/main/src/settings/mariadb.py'
 
-from functools import lru_cache
 from urllib.parse import quote_plus
 
-from pydantic import Field, MariaDBDsn, ValidationError
+from pydantic import Field, MariaDBDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,7 +17,12 @@ class MariadbSettings(BaseSettings):
     database: str
     debug: bool = False
 
-    model_config = SettingsConfigDict(extra='ignore', env_prefix='MARIADB_')
+    model_config = SettingsConfigDict(
+        extra='ignore',
+        env_prefix='MARIADB_',
+        env_file='.env',
+        env_file_encoding='utf-8',
+    )
 
     @property
     def url(self) -> MariaDBDsn:
@@ -29,13 +32,3 @@ class MariadbSettings(BaseSettings):
         host = self.host
         port = self.port
         return f'{scheme}://{user}:{password}@{host}:{port}/{self.database}'
-
-
-@lru_cache
-def get_mariadb_settings() -> MariadbSettings:
-    try:
-        return MariadbSettings()
-    except ValidationError:
-        pass
-
-    return MariadbSettings(_env_file='.env')

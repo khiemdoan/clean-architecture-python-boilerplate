@@ -1,13 +1,11 @@
-
 __author__ = 'Khiem Doan'
 __github__ = 'https://github.com/khiemdoan'
 __email__ = 'doankhiem.crazy@gmail.com'
 __url__ = 'https://github.com/khiemdoan/clean-architecture-python-boilerplate/blob/main/src/settings/rabbitmq.py'
 
-from functools import lru_cache
 from urllib.parse import quote_plus
 
-from pydantic import AmqpDsn, Field, ValidationError
+from pydantic import AmqpDsn, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,7 +16,12 @@ class RabbitmqSettings(BaseSettings):
     password: str
     tls: bool = False
 
-    model_config = SettingsConfigDict(extra='ignore', env_prefix='RABBITMQ_')
+    model_config = SettingsConfigDict(
+        extra='ignore',
+        env_prefix='RABBITMQ_',
+        env_file='.env',
+        env_file_encoding='utf-8',
+    )
 
     @property
     def url(self) -> AmqpDsn:
@@ -27,14 +30,4 @@ class RabbitmqSettings(BaseSettings):
         password = quote_plus(self.password)
         host = self.host
         port = self.port
-        return f'{scheme}://{user}:{password}@{host}:{port}/'
-
-
-@lru_cache
-def get_rabbitmq_settings() -> RabbitmqSettings:
-    try:
-        return RabbitmqSettings()
-    except ValidationError:
-        pass
-
-    return RabbitmqSettings(_env_file='.env')
+        return f'{scheme}://{user}:{password}@{host}:{port}//'
