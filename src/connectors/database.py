@@ -28,7 +28,7 @@ class Database:
     def get_sync_session(cls) -> Generator[Session, None, None]:
         if cls._sync_engine is None:
             settings = PostgresSettings()
-            cls._sync_engine = create_engine(settings.url, echo=settings.debug)
+            cls._sync_engine = create_engine(settings.url, pool_pre_ping=True, echo=settings.debug)
 
         try:
             session = sessionmaker(bind=cls._sync_engine)
@@ -41,7 +41,7 @@ class Database:
     async def get_async_session(cls) -> AsyncGenerator[AsyncSession, None]:
         if cls._async_engine is None:
             settings = PostgresSettings()
-            cls._async_engine = create_async_engine(settings.url, echo=settings.debug)
+            cls._async_engine = create_async_engine(settings.url, pool_pre_ping=True, echo=settings.debug)
 
         try:
             session = async_sessionmaker(bind=cls._async_engine)
