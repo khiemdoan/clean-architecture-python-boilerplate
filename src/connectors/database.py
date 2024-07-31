@@ -28,7 +28,12 @@ class Database:
     def get_sync_session(cls) -> Generator[Session, None, None]:
         if cls._sync_engine is None:
             settings = PostgresSettings()
-            cls._sync_engine = create_engine(settings.url, pool_pre_ping=True, echo=settings.debug)
+            cls._sync_engine = create_engine(
+                settings.url,
+                pool_pre_ping=True,
+                echo=settings.debug,
+                connect_args={'server_settings': {'application_name': settings.app_name}},
+            )
 
         try:
             session = sessionmaker(bind=cls._sync_engine)
