@@ -15,6 +15,7 @@ class PostgresSettings(BaseSettings):
     user: str
     password: str
     database: str
+    app_name: str = ''
     debug: bool = False
 
     model_config = SettingsConfigDict(
