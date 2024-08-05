@@ -1,25 +1,40 @@
-
 __author__ = 'Khiem Doan'
 __github__ = 'https://github.com/khiemdoan'
 __email__ = 'doankhiem.crazy@gmail.com'
 __url__ = 'https://github.com/khiemdoan/clean-architecture-python-boilerplate/blob/main/src/templates/__init__.py'
 
-__all__ = ['arender', 'render']
+__all__ = [
+    'Render',
+]
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, Coroutine
 
-from jinja2 import Environment, FileSystemLoader
-
-this_dir = Path(__file__).parent
-env = Environment(loader=FileSystemLoader(this_dir))
+from jinja2 import FileSystemLoader, select_autoescape
+from jinja2.nativetypes import NativeEnvironment
 
 
-def render(file: str, context: dict[str, Any] = {}, **kwargs) -> str:
-    template = env.get_template(file)
-    return template.render(context, **kwargs)
+class Render:
+    def __init__(self) -> None:
+        self._loop = asyncio.get_event_loop()
+        this_dir = Path(__file__).parent
+        loader = FileSystemLoader(this_dir)
+        autoescape = select_autoescape()
+        self._sync_env = NativeEnvironment(
+            loader=loader,
+            autoescape=autoescape,
+        )
+        self._async_env = NativeEnvironment(
+            loader=loader,
+            autoescape=autoescape,
+            enable_async=True,
+        )
 
-
-async def arender(file: str, context: dict[str, Any] = {}, **kwargs) -> str:
-    return await asyncio.to_thread(render, file, context, **kwargs)
+    def __call__(self, file: str, context: dict[str, Any] = {}, **kwargs) -> str | Coroutine[Any, Any, str]:
+        if self._loop.is_running():
+            template = self._async_env.get_template(file)
+            return template.render_async(context, **kwargs)
+        else:
+            template = self._sync_env.get_template(file)
+            return template.render(context, **kwargs)
