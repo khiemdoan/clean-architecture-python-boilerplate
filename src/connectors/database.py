@@ -7,7 +7,9 @@ from asyncio import current_task
 from typing import Annotated, AsyncGenerator, Generator
 
 from fast_depends import Depends
+from loguru import logger
 from sqlalchemy import Engine, create_engine
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -32,28 +34,47 @@ class Database:
                 settings.url,
                 pool_pre_ping=True,
                 echo=settings.debug,
-                connect_args={'server_settings': {'application_name': settings.app_name}},
+                connect_args={'application_name': settings.app_name},
             )
 
         try:
-            session = sessionmaker(bind=cls._sync_engine)
-            session = scoped_session(session)
-            yield session()
+            maker = sessionmaker(bind=cls._sync_engine)
+            scoped = scoped_session(maker)
+            session = scoped()
+            yield session
         finally:
-            session.remove()
+            try:
+                session.commit()
+            except SQLAlchemyError as ex:
+                logger.exception(ex)
+                session.rollback()
+            finally:
+                scoped.remove()
 
     @classmethod
     async def get_async_session(cls) -> AsyncGenerator[AsyncSession, None]:
         if cls._async_engine is None:
             settings = PostgresSettings()
-            cls._async_engine = create_async_engine(settings.url, pool_pre_ping=True, echo=settings.debug)
+            cls._async_engine = create_async_engine(
+                settings.url,
+                pool_pre_ping=True,
+                echo=settings.debug,
+                connect_args={'application_name': settings.app_name},
+            )
 
         try:
-            session = async_sessionmaker(bind=cls._async_engine)
-            session = async_scoped_session(session, current_task)
-            yield session()
+            maker = async_sessionmaker(bind=cls._async_engine)
+            scoped = async_scoped_session(maker, current_task)
+            session = scoped()
+            yield session
         finally:
-            await session.remove()
+            try:
+                await session.commit()
+            except SQLAlchemyError as ex:
+                logger.exception(ex)
+                await session.rollback()
+            finally:
+                await scoped.remove()
 
 
 DbSyncSession = Annotated[Session, Depends(Database.get_sync_session)]
