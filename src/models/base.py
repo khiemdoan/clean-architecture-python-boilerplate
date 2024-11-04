@@ -12,10 +12,10 @@ __url__ = 'https://github.com/khiemdoan/clean-architecture-python-boilerplate/bl
 import contextlib
 import re
 from datetime import date, datetime, timezone
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from uuid import UUID
 
-from advanced_alchemy.types import GUID, UUID_UTILS_INSTALLED, BigIntIdentity, DateTimeUTC, JsonB
+from advanced_alchemy.types import GUID, NANOID_INSTALLED, UUID_UTILS_INSTALLED, BigIntIdentity, DateTimeUTC, JsonB
 from sqlalchemy import Date, Index, MetaData, Sequence, String, UniqueConstraint
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -26,28 +26,38 @@ from sqlalchemy.orm import (
     mapped_column,
     orm_insert_sentinel,
     registry,
+    validates,
 )
 from sqlalchemy.orm.decl_base import _TableArgsType as TableArgsType  # pyright: ignore[reportPrivateUsage]
+from typing_extensions import TypeVar
 
 if UUID_UTILS_INSTALLED and not TYPE_CHECKING:
     from uuid_utils.compat import uuid4, uuid6, uuid7  # pyright: ignore[reportMissingImports]
+
 else:
     from uuid import uuid4  # type: ignore[assignment]
 
     uuid6 = uuid4  # type: ignore[assignment]
     uuid7 = uuid4  # type: ignore[assignment]
 
-from sqlalchemy.sql import FromClause
-from sqlalchemy.sql.schema import _NamingSchemaParameter as NamingSchemaParameter  # pyright: ignore[reportPrivateUsage]
-from sqlalchemy.types import TypeEngine
+if NANOID_INSTALLED and not TYPE_CHECKING:
+    from fastnanoid import generate as nanoid  # pyright: ignore[reportMissingImports]
+
+else:
+    nanoid = uuid4  # type: ignore[assignment]
+
+if TYPE_CHECKING:
+    from sqlalchemy.sql import FromClause
+    from sqlalchemy.sql.schema import _NamingSchemaParameter as NamingSchemaParameter  # pyright: ignore[reportPrivateUsage]
+    from sqlalchemy.types import TypeEngine
+
 
 __all__ = (
-    'AssociationAuditBase',
-    'AssociationBase',
     'AuditColumns',
     'BigIntAuditBase',
     'BigIntBase',
     'BigIntPrimaryKey',
+    'CommonTableAttributes',
     'create_registry',
     'ModelProtocol',
     'UUIDAuditBase',
@@ -56,6 +66,9 @@ __all__ = (
     'UUIDv6Base',
     'UUIDv7AuditBase',
     'UUIDv7Base',
+    'NanoIDAuditBase',
+    'NanoIDBase',
+    'NanoIDPrimaryKey',
     'UUIDPrimaryKey',
     'UUIDv7PrimaryKey',
     'UUIDv6PrimaryKey',
@@ -64,6 +77,7 @@ __all__ = (
     'orm_registry',
     'merge_table_arguments',
     'TableArgsType',
+    'BasicAttributes',
 )
 
 
@@ -71,6 +85,7 @@ UUIDBaseT = TypeVar('UUIDBaseT', bound='UUIDBase')
 BigIntBaseT = TypeVar('BigIntBaseT', bound='BigIntBase')
 UUIDv6BaseT = TypeVar('UUIDv6BaseT', bound='UUIDv6Base')
 UUIDv7BaseT = TypeVar('UUIDv7BaseT', bound='UUIDv7Base')
+NanoIDBaseT = TypeVar('NanoIDBaseT', bound='NanoIDBase')
 
 
 def same_as(column_name):
@@ -114,8 +129,8 @@ def merge_table_arguments(cls: type[DeclarativeBase], table_args: TableArgsType 
     for arg_to_merge in (*mixin_table_args, table_args):
         if arg_to_merge:
             if isinstance(arg_to_merge, tuple):
-                last_positional_arg = arg_to_merge[-1]
-                args.extend(arg_to_merge[:-1])
+                last_positional_arg = arg_to_merge[-1]  # pyright: ignore[reportUnknownVariableType]
+                args.extend(arg_to_merge[:-1])  # pyright: ignore[reportUnknownArgumentType]
                 if isinstance(last_positional_arg, dict):
                     kwargs.update(last_positional_arg)  # pyright: ignore[reportUnknownArgumentType]
                 else:
@@ -134,15 +149,16 @@ def merge_table_arguments(cls: type[DeclarativeBase], table_args: TableArgsType 
 class ModelProtocol(Protocol):
     """The base SQLAlchemy model protocol."""
 
-    __table__: FromClause
-    __mapper__: Mapper[Any]
-    __name__: str
+    if TYPE_CHECKING:
+        __table__: FromClause
+        __mapper__: Mapper[Any]
+        __name__: str
 
     def to_dict(self, exclude: set[str] | None = None) -> dict[str, Any]:
         """Convert model to dictionary.
 
         Returns:
-            dict[str, Any]: A dict representation of the model
+            Dict[str, Any]: A dict representation of the model
         """
         ...
 
@@ -180,6 +196,17 @@ class UUIDv7PrimaryKey:
         return orm_insert_sentinel(name='sa_orm_sentinel')
 
 
+class NanoIDPrimaryKey:
+    """Nano ID Primary Key Field Mixin."""
+
+    id: Mapped[str] = mapped_column(default=nanoid, primary_key=True)
+    """Nano ID Primary key column."""
+
+    @declared_attr
+    def _sentinel(cls) -> Mapped[int]:
+        return orm_insert_sentinel(name='sa_orm_sentinel')
+
+
 class BigIntPrimaryKey:
     """BigInt Primary Key Field Mixin."""
 
@@ -208,6 +235,12 @@ class AuditColumns:
         onupdate=lambda: datetime.now(timezone.utc),
     )
     """Date/time of instance last update."""
+
+    @validates('created_at', 'updated_at')
+    def validate_tz_info(self, _: str, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value
 
 
 def create_registry(
@@ -243,9 +276,10 @@ orm_registry = create_registry()
 class Model(DeclarativeBase):
     """Basic attributes for SQLALchemy tables and queries."""
 
-    __name__: str
-    __table__: FromClause
-    __mapper__: Mapper[Any]
+    if TYPE_CHECKING:
+        __name__: str
+        __table__: FromClause
+        __mapper__: Mapper[Any]
 
     if TYPE_CHECKING:
         __tablename__: str
@@ -261,7 +295,7 @@ class Model(DeclarativeBase):
         """Convert model to dictionary.
 
         Returns:
-            dict[str, Any]: A dict representation of the model
+            Dict[str, Any]: A dict representation of the model
         """
         exclude = {'sa_orm_sentinel', '_sentinel'}.union(self._sa_instance_state.unloaded).union(exclude or [])  # type: ignore[attr-defined]
         return {
@@ -339,6 +373,18 @@ class UUIDv7Base(Model, UUIDv7PrimaryKey):
 
 class UUIDv7AuditBase(Model, UUIDv7PrimaryKey, AuditColumns):
     """Base for declarative models with UUID primary keys and audit columns."""
+
+    __abstract__ = True
+
+
+class NanoIDBase(Model, NanoIDPrimaryKey):
+    """Base for all SQLAlchemy declarative models with Nano ID primary keys."""
+
+    __abstract__ = True
+
+
+class NanoIDAuditBase(Model, NanoIDPrimaryKey, AuditColumns):
+    """Base for declarative models with Nano ID primary keys and audit columns."""
 
     __abstract__ = True
 
