@@ -7,7 +7,8 @@ __all__ = [
     'Database',
     'DbAsyncSession',
     'DbSyncSession',
+    'PostgresSettings',
 ]
 
 
-from .database import Database, DbAsyncSession, DbSyncSession
+from .database import Database, DbAsyncSession, DbSyncSession, PostgresSettings
