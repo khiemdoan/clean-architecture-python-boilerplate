@@ -5,9 +5,12 @@ __source__ = 'https://github.com/khiemdoan/clean-architecture-python-boilerplate
 
 from asyncio import current_task
 from typing import Annotated, AsyncGenerator, Generator
+from urllib.parse import quote_plus
 
 from fast_depends import Depends
 from loguru import logger
+from pydantic import Field, PostgresDsn
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import (
@@ -19,10 +22,34 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
-from settings import PostgresSettings
+
+class PostgresSettings(BaseSettings):
+    host: str = 'localhost'
+    port: int = Field(gt=0, le=65535, default=5432)
+    user: str
+    password: str
+    database: str
+    app_name: str = ''
+    debug: bool = False
+
+    model_config = SettingsConfigDict(
+        extra='ignore',
+        env_prefix='POSTGRES_',
+        env_file='.env',
+        env_file_encoding='utf-8',
+    )
+
+    @property
+    def url(self) -> PostgresDsn:
+        scheme = 'postgresql+psycopg'
+        user = quote_plus(self.user)
+        password = quote_plus(self.password)
+        host = self.host
+        port = self.port
+        return PostgresDsn(f'{scheme}://{user}:{password}@{host}:{port}/{self.database}')
 
 
-class Database:
+class _Postgres:
     _sync_engine: Engine = None
     _async_engine: AsyncEngine = None
 
@@ -31,7 +58,7 @@ class Database:
         if cls._sync_engine is None:
             settings = PostgresSettings()
             cls._sync_engine = create_engine(
-                settings.url,
+                str(settings.url),
                 pool_pre_ping=True,
                 echo=settings.debug,
                 connect_args={'application_name': settings.app_name},
@@ -56,7 +83,7 @@ class Database:
         if cls._async_engine is None:
             settings = PostgresSettings()
             cls._async_engine = create_async_engine(
-                settings.url,
+                str(settings.url),
                 pool_pre_ping=True,
                 echo=settings.debug,
                 connect_args={'application_name': settings.app_name},
@@ -77,5 +104,5 @@ class Database:
                 await scoped.remove()
 
 
-DbSyncSession = Annotated[Session, Depends(Database.get_sync_session)]
-DbAsyncSession = Annotated[AsyncSession, Depends(Database.get_async_session)]
+DbSyncSession = Annotated[Session, Depends(_Postgres.get_sync_session)]
+DbAsyncSession = Annotated[AsyncSession, Depends(_Postgres.get_async_session)]

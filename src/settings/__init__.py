@@ -5,7 +5,6 @@ __url__ = 'https://github.com/khiemdoan/clean-architecture-python-boilerplate/bl
 
 __all__ = [
     'MariadbSettings',
-    'PostgresSettings',
     'RabbitmqSettings',
     'RedisSettings',
     'TelegramSettings',
@@ -13,7 +12,6 @@ __all__ = [
 
 
 from .mariadb import MariadbSettings
-from .postgres import PostgresSettings
 from .rabbitmq import RabbitmqSettings
 from .redis import RedisSettings
 from .telegram import TelegramSettings
