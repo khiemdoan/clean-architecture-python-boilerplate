@@ -12,24 +12,26 @@ license = {text = "GPL-3"}
 requires-python = ">=3.11"
 
 dependencies = [
-    "loguru==0.7.2",
+    "loguru==0.7.3",
     "fast-depends==2.4.12",
-    "pydantic==2.9.2",
-    "pydantic-settings==2.6.1",
+    "pydantic==2.10.5",
+    "pydantic-settings==2.7.1",
     "psycopg[binary,pool]==3.2.3",
-    "SQLAlchemy[asyncio]==2.0.36",
-    "alembic==1.13.3",
-    "advanced-alchemy==0.22.1",
-    "Jinja2==3.1.4",
+    "SQLAlchemy[asyncio]==2.0.37",
+    "alembic==1.14.0",
+    "advanced-alchemy==0.28.0",
+    "Jinja2==3.1.5",
     "valkey[libvalkey]==6.0.2",
-    "aio-pika==9.4.3",
+    "aio-pika==9.5.4",
     "celery==5.4.0",
-    "httpx[http2]==0.27.2",
+    "httpx[http2]==0.28.1",
     "tenacity==8.5.0",
     "APScheduler==4.0.0a5",
 ]
 
-[tool.pdm.dev-dependencies]
+[dependency-groups]
+tools = [
+]
 testing = [
     "pytest",
     "pytest-asyncio",
