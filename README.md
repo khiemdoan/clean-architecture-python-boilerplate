@@ -6,32 +6,32 @@ Just a simple boilerplate to create new projects for general purposes.
 
 Create virtual environment
 
-```zsh
-pdm venv create
+```sh
+uv venv
 ```
 
-Generate `pdm.lock`
+Generate `uv.lock`
 
-```zsh
-pdm lock -G linting,testing
+```sh
+uv lock -v -U
 ```
 
 Active environment
 
-```zsh
+```sh
 source .venv/bin/activate
 ```
 
 Install main dependencies for production
 
-```zsh
-pdm sync --prod --no-editable
+```sh
+uv sync --frozen
 ```
 
 Install main + dev dependencies
 
 ```zsh
-pdm install
+uv sync --group tools --group linting --group testing
 ```
 
 **Note**: In order to prevent conflicts in the production environment, it is important to utilize fixed versions of the main dependencies. If there are any packages that require updating, we will handle the process manually.
