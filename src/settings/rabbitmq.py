@@ -30,4 +30,4 @@ class RabbitmqSettings(BaseSettings):
         password = quote_plus(self.password)
         host = self.host
         port = self.port
-        return f'{scheme}://{user}:{password}@{host}:{port}//'
+        return AmqpDsn(f'{scheme}://{user}:{password}@{host}:{port}//')
