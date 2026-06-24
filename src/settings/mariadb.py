@@ -31,4 +31,4 @@ class MariadbSettings(BaseSettings):
         password = quote_plus(self.password)
         host = self.host
         port = self.port
-        return f'{scheme}://{user}:{password}@{host}:{port}/{self.database}'
+        return MariaDBDsn(f'{scheme}://{user}:{password}@{host}:{port}/{self.database}')
